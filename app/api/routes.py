@@ -8,7 +8,10 @@ router = APIRouter()
 
 @router.get("/health")
 def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+    return {
+            "status": "ok",
+            "message": "Server AI Agent sedang berjalan"
+        }
 
 
 @router.post("/chat", response_model=ChatResponse)
