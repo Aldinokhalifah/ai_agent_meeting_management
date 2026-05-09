@@ -1,9 +1,15 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from typing import Optional, List
 
+class Message(BaseModel):
+    role: str  # "user" | "assistant" | "tool"
+    content: str
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, description="User prompt")
-
+    message: str
+    user_id: str
+    conversation_history: Optional[List[Message]] = []
 
 class ChatResponse(BaseModel):
-    answer: str
+    response: str
+    actions_taken: Optional[List[str]] = []
