@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from schemas.chat import ChatRequest, ChatResponse
 from agent import run_agent
 from core.config import APP_HOST, APP_PORT
+from test_db import test_connection
 import uvicorn
 
 app = FastAPI(title="Meeting Management AI Agent")
@@ -17,6 +18,10 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return { "status": "ok", "service": "Meeting AI Agent" }
+
+@app.get("/test-connection")
+def test_connection_endpoint():
+    return test_connection() 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
