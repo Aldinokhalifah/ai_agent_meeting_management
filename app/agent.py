@@ -2,6 +2,7 @@ from openai import AsyncOpenAI
 from core.config import OPENROUTER_API_KEY, OPENROUTER_MODEL
 from schemas.chat import ChatResponse
 import json
+import traceback
 
 # Setup OpenRouter client
 client = AsyncOpenAI(
@@ -24,10 +25,14 @@ Kamu bisa membantu:
 Aturan penting:
 - Selalu gunakan tools yang tersedia untuk mengambil atau mengubah data
 - Jangan mengarang data — selalu ambil dari tools
-- Kalau user minta buat meeting, tanyakan detail yang kurang (judul, waktu, dll)
+- Jika user menyebut lokasi yang tidak ada, tanyakan ruangan mana yang ingin dipakai
+- Kalau user minta buat meeting tapi detail kurang lengkap, tanyakan dulu sebelum eksekusi
 - Jawab dengan ringkas dan jelas
 - Format tanggal dalam Bahasa Indonesia yang mudah dipahami
 - Kalau ada error dari tool, sampaikan dengan bahasa yang ramah
+- Untuk waktu, selalu konversi ke format ISO 8601 (contoh: 2025-05-01T09:00:00)
+- Jika user bilang 'hari ini', gunakan tanggal hari ini
+- Jika user bilang 'besok', gunakan tanggal besok
 """
 
 async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
@@ -109,6 +114,9 @@ async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
                 tool_result = await execute_tool(tool_name, tool_args)
                 result_str = json.dumps(tool_result, ensure_ascii=False, default=str)
             except Exception as e:
+                # Tambahkan print untuk debug
+                print(f"[Tool Error] {tool_name}: {str(e)}")
+                traceback.print_exc()
                 result_str = json.dumps({
                     "error": True,
                     "message": str(e)

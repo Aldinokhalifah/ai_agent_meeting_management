@@ -15,6 +15,7 @@ def execute_query(query: str, params: tuple = None, fetch: str = "all"):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query, params)
+            conn.commit()
 
             if fetch == "all":
                 result = cur.fetchall()
@@ -23,7 +24,6 @@ def execute_query(query: str, params: tuple = None, fetch: str = "all"):
                 result = cur.fetchone()
                 return dict(result) if result else None
             elif fetch == "none":
-                conn.commit()
                 return None
 
     except Exception as e:

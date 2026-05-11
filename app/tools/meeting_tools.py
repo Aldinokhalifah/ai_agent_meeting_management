@@ -148,9 +148,35 @@ async def execute_meeting_tool(tool_name: str, args: dict):
     else:
         raise ValueError(f"Meeting tool '{tool_name}' tidak ditemukan")
 
+def parse_datetime(value: str) -> str:
+    """Konversi berbagai format datetime ke ISO 8601"""
+    if not value:
+        raise ValueError("scheduled_at tidak boleh kosong")
+
+    # Coba beberapa format umum
+    formats = [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt).isoformat()
+        except ValueError:
+            continue
+
+    raise ValueError(f"Format datetime tidak valid: {value}")
 
 async def _create_meeting(args: dict, user_id: str):
-    # Buat meeting
+    try:
+        scheduled_at = parse_datetime(args["scheduled_at"])
+        end_time = parse_datetime(args["end_time"]) if args.get("end_time") else None
+    except ValueError as e:
+        raise Exception(f"Format waktu tidak valid: {str(e)}")
+
     meeting = execute_query(
         """INSERT INTO meetings (title, description, scheduled_at, end_time, location, created_by)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -158,8 +184,8 @@ async def _create_meeting(args: dict, user_id: str):
         (
             args["title"],
             args.get("description"),
-            args["scheduled_at"],
-            args.get("end_time"),
+            scheduled_at,
+            end_time,
             args.get("location"),
             user_id,
         ),
@@ -169,7 +195,6 @@ async def _create_meeting(args: dict, user_id: str):
     if not meeting:
         raise Exception("Gagal membuat meeting")
 
-    # Tambahkan creator sebagai host
     execute_query(
         """INSERT INTO meeting_participants (meeting_id, user_id, role)
             VALUES (%s, %s, 'host')""",
