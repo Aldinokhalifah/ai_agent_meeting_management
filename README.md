@@ -5,12 +5,14 @@ Starter project Python AI agent dengan FastAPI + LangChain.
 ## Setup
 
 1. Aktifkan virtual environment:
-   - PowerShell: `.\.venv\Scripts\Activate.ps1`
+  - PowerShell: `.\.venv\Scripts\Activate.ps1`
 2. Salin `.env.example` menjadi `.env`, lalu isi nilainya.
 3. Jalankan server:
-   - `.\.venv\Scripts\python -m uvicorn app.main:app --reload || python app/main.py`
+  - `.\.venv\Scripts\python -m uvicorn app.main:app --reload || python app/main.py`
 
 ## Endpoint
 
 - `GET /api/health`
+- `GET /api/test-connection`
 - `POST /api/chat`
+

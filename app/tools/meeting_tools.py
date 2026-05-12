@@ -128,6 +128,27 @@ MEETING_TOOLS = [
                 "required": ["meeting_id", "status", "user_id"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_meeting",
+            "description": "Menghapus meeting. Gunakan tool ini jika user ingin menghapus meeting.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["meeting_id", "user_id"]
+            }
+        }
     }
 ]
 
@@ -145,6 +166,8 @@ async def execute_meeting_tool(tool_name: str, args: dict):
         return await _search_meetings(args, user_id)
     elif tool_name == "update_meeting_status":
         return await _update_meeting_status(args, user_id)
+    elif tool_name == "remove_meeting":
+        return await _remove_meeting(args, user_id)
     else:
         raise ValueError(f"Meeting tool '{tool_name}' tidak ditemukan")
 
@@ -322,4 +345,50 @@ async def _update_meeting_status(args: dict, user_id: str):
     return {
         "success": True,
         "message": f"Status meeting berhasil diubah menjadi '{status}'"
+    }
+
+async def _remove_meeting(args: dict, user_id: str):
+    meeting_id = args["meeting_id"]
+
+    # Ambil meeting
+    meeting = execute_query(
+        """SELECT id, title, description, scheduled_at, end_time,
+            location, status, created_by
+            FROM meetings WHERE id = %s""",
+        (meeting_id,),
+        fetch="one"
+    )
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
+    # Cek hanya host yang bisa update
+    role = execute_query(
+        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not role or role["role"] != "host":
+        raise Exception("Hanya host yang dapat menghapus meeting")
+
+    # Hapus dependensi terlebih dahulu untuk menghindari FK constraint (jika ada)
+    execute_query(
+        "DELETE FROM action_items WHERE meeting_id = %s",
+        (meeting_id,),
+        fetch="none"
+    )
+    execute_query(
+        "DELETE FROM meeting_participants WHERE meeting_id = %s",
+        (meeting_id,),
+        fetch="none"
+    )
+
+    execute_query(
+        "DELETE FROM meetings WHERE id = %s",
+        (meeting_id,),
+        fetch="none"
+    )
+
+    return {
+        "success": True,
+        "message": f"Meeting dengan judul: {meeting['title']} berhasil dihapus"
     }

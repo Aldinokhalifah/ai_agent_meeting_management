@@ -85,6 +85,31 @@ ACTION_ITEM_TOOLS = [
                 "required": ["item_id", "meeting_id", "status", "user_id"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_action_item",
+            "description": "Menghapus action item di sebuah meeting.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {
+                        "type": "string",
+                        "description": "ID action item"
+                    },
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting tempat action item berada"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["item_id", "meeting_id", "user_id"]
+            }
+        }
     }
 ]
 
@@ -96,6 +121,8 @@ async def execute_action_item_tool(tool_name: str, args: dict):
         return await _create_action_item(args)
     elif tool_name == "update_action_item_status":
         return await _update_action_item_status(args)
+    elif tool_name == "delete_action_item":
+        return await _delete_action_item(args)
     else:
         raise ValueError(f"Action item tool '{tool_name}' tidak ditemukan")
 
@@ -189,4 +216,51 @@ async def _update_action_item_status(args: dict):
     return {
         "success": True,
         "message": f"Status action item berhasil diubah menjadi '{status}'"
+    }
+
+async def _delete_action_item(args: dict):
+    item_id = args["item_id"]
+    meeting_id = args["meeting_id"]
+    user_id = args["user_id"]
+
+    # Ambil meeting
+    meeting = execute_query(
+        """SELECT id, title, description, scheduled_at, end_time,
+            location, status, created_by
+            FROM meetings WHERE id = %s""",
+        (meeting_id,),
+        fetch="one"
+    )
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
+    # Cek role
+    role = execute_query(
+        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not role or role["role"] not in ("host", "secretary"):
+        raise Exception("Hanya host dan secretary yang dapat mengubah action item")
+
+    action_item = execute_query(
+        """SELECT id, meeting_id, carried_from_id, description, assigned_to, due_date, status, created_at
+           FROM action_items
+           WHERE id = %s AND meeting_id = %s""",
+        (item_id, meeting_id),
+        fetch="one"
+    )
+
+    if not action_item:
+        raise Exception("Action item tidak ditemukan")
+
+    execute_query(
+        "DELETE FROM action_items WHERE id = %s AND meeting_id = %s",
+        (item_id, meeting_id),
+        fetch="none"
+    )
+
+    return {
+        "success": True,
+        "message": f"Action item: {action_item['description']} berhasil dihapus"
     }
