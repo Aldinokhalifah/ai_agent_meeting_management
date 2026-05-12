@@ -110,7 +110,33 @@ ACTION_ITEM_TOOLS = [
                 "required": ["item_id", "meeting_id", "user_id"]
             }
         }
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_action_items_by_meeting",
+            "description": "Mengambil semua action items dari sebuah meeting tertentu.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["open", "done", "all"],
+                        "description": "Filter status action item (default: all)"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["meeting_id", "user_id"]
+            }
+        }
+    },
 ]
 
 
@@ -123,6 +149,8 @@ async def execute_action_item_tool(tool_name: str, args: dict):
         return await _update_action_item_status(args)
     elif tool_name == "delete_action_item":
         return await _delete_action_item(args)
+    elif tool_name == "get_action_items_by_meeting":
+        return await _get_action_items_by_meeting(args)
     else:
         raise ValueError(f"Action item tool '{tool_name}' tidak ditemukan")
 
@@ -245,8 +273,8 @@ async def _delete_action_item(args: dict):
 
     action_item = execute_query(
         """SELECT id, meeting_id, carried_from_id, description, assigned_to, due_date, status, created_at
-           FROM action_items
-           WHERE id = %s AND meeting_id = %s""",
+            FROM action_items
+            WHERE id = %s AND meeting_id = %s""",
         (item_id, meeting_id),
         fetch="one"
     )
@@ -263,4 +291,45 @@ async def _delete_action_item(args: dict):
     return {
         "success": True,
         "message": f"Action item: {action_item['description']} berhasil dihapus"
+    }
+
+async def _get_action_items_by_meeting(args: dict):
+    meeting_id = args["meeting_id"]
+    user_id = args["user_id"]
+    status = args.get("status", "all")
+
+    # Cek akses
+    access = execute_query(
+        "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not access:
+        raise Exception("Kamu tidak memiliki akses ke meeting ini")
+
+    if status == "all":
+        items = execute_query(
+            """SELECT ai.id, ai.description, ai.status, ai.due_date,
+                u.name as assigned_to_name
+                FROM action_items ai
+                LEFT JOIN users u ON ai.assigned_to = u.id
+                WHERE ai.meeting_id = %s
+                ORDER BY ai.created_at ASC""",
+            (meeting_id,)
+        )
+    else:
+        items = execute_query(
+            """SELECT ai.id, ai.description, ai.status, ai.due_date,
+                u.name as assigned_to_name
+                FROM action_items ai
+                LEFT JOIN users u ON ai.assigned_to = u.id
+                WHERE ai.meeting_id = %s AND ai.status = %s
+                ORDER BY ai.created_at ASC""",
+            (meeting_id, status)
+        )
+
+    return {
+        "success": True,
+        "action_items": items,
+        "total": len(items)
     }

@@ -149,7 +149,91 @@ MEETING_TOOLS = [
                 "required": ["meeting_id", "user_id"]
             }
         }
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_meeting_participants",
+            "description": "Mengambil daftar peserta dari sebuah meeting tertentu.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["meeting_id", "user_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_upcoming_meetings",
+            "description": "Mengambil daftar meeting yang akan datang dalam beberapa hari ke depan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "integer",
+                        "description": "Jumlah hari ke depan (default 7)"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["user_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_meeting_notes",
+            "description": "Mengambil notulen dari sebuah meeting tertentu.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["meeting_id", "user_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ai_summary",
+            "description": "Mengambil AI summary dari sebuah meeting yang sudah selesai.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["meeting_id", "user_id"]
+            }
+        }
+    },
 ]
 
 
@@ -168,6 +252,14 @@ async def execute_meeting_tool(tool_name: str, args: dict):
         return await _update_meeting_status(args, user_id)
     elif tool_name == "remove_meeting":
         return await _remove_meeting(args, user_id)
+    elif tool_name == "get_meeting_participants":
+        return await _get_meeting_participants(args, user_id)
+    elif tool_name == "get_upcoming_meetings":
+        return await _get_upcoming_meetings(args, user_id)
+    elif tool_name == "get_meeting_notes":
+        return await _get_meeting_notes(args, user_id)
+    elif tool_name == "get_ai_summary":
+        return await _get_ai_summary(args, user_id)
     else:
         raise ValueError(f"Meeting tool '{tool_name}' tidak ditemukan")
 
@@ -392,3 +484,166 @@ async def _remove_meeting(args: dict, user_id: str):
         "success": True,
         "message": f"Meeting dengan judul: {meeting['title']} berhasil dihapus"
     }
+
+async def _get_meeting_participants(args: dict, user_id: str):
+    meeting_id = args["meeting_id"]
+
+    # Cek akses
+    access = execute_query(
+        "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not access:
+        raise Exception("Kamu tidak memiliki akses ke meeting ini")
+
+    participants = execute_query(
+        """SELECT u.id, u.name, u.email, mp.role
+            FROM meeting_participants mp
+            JOIN users u ON mp.user_id = u.id
+            WHERE mp.meeting_id = %s
+            ORDER BY mp.role ASC""",
+        (meeting_id,)
+    )
+
+    return {
+        "success": True,
+        "participants": participants,
+        "total": len(participants)
+    }
+
+
+async def _get_upcoming_meetings(args: dict, user_id: str):
+    days = args.get("days", 7)
+    
+    meetings = execute_query(
+        """SELECT m.id, m.title, m.scheduled_at, m.end_time,
+            m.location, m.status, mp.role as my_role
+            FROM meetings m
+            JOIN meeting_participants mp ON m.id = mp.meeting_id
+            WHERE mp.user_id = %s
+            AND m.status = 'scheduled'
+            AND m.scheduled_at BETWEEN NOW() AND NOW() + INTERVAL '%s days'
+            ORDER BY m.scheduled_at ASC""",
+        (user_id, days)
+    )
+
+    return {
+        "success": True,
+        "meetings": meetings,
+        "total": len(meetings),
+        "days": days
+    }
+
+
+async def _get_meeting_notes(args: dict, user_id: str):
+    meeting_id = args["meeting_id"]
+
+    # Cek akses
+    access = execute_query(
+        "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not access:
+        raise Exception("Kamu tidak memiliki akses ke meeting ini")
+
+    note = execute_query(
+        """SELECT n.content, n.updated_at, u.name as created_by_name
+            FROM notes n
+            JOIN users u ON n.created_by = u.id
+            WHERE n.meeting_id = %s""",
+        (meeting_id,),
+        fetch="one"
+    )
+
+    if not note:
+        return {
+            "success": True,
+            "note": None,
+            "message": "Belum ada notulen untuk meeting ini"
+        }
+
+    # Konversi Tiptap JSON ke plain text
+    content = note.get("content", {})
+    plain_text = _tiptap_to_text(content)
+
+    return {
+        "success": True,
+        "note": {
+            "content": plain_text,
+            "updated_at": str(note["updated_at"]),
+            "created_by": note["created_by_name"]
+        }
+    }
+
+
+async def _get_ai_summary(args: dict, user_id: str):
+    meeting_id = args["meeting_id"]
+
+    # Cek akses
+    access = execute_query(
+        "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not access:
+        raise Exception("Kamu tidak memiliki akses ke meeting ini")
+
+    meeting = execute_query(
+        "SELECT title, status, ai_summary FROM meetings WHERE id = %s",
+        (meeting_id,),
+        fetch="one"
+    )
+
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
+    if meeting["status"] != "done":
+        return {
+            "success": False,
+            "message": "AI summary hanya tersedia setelah meeting selesai"
+        }
+
+    if not meeting["ai_summary"]:
+        return {
+            "success": False,
+            "message": "AI summary belum dibuat untuk meeting ini"
+        }
+
+    return {
+        "success": True,
+        "meeting_title": meeting["title"],
+        "ai_summary": meeting["ai_summary"]
+    }
+
+
+def _tiptap_to_text(content) -> str:
+    """Konversi Tiptap JSON ke plain text"""
+    if not content:
+        return ""
+
+    def parse_node(node):
+        if not node:
+            return ""
+        node_type = node.get("type", "")
+        children = node.get("content", [])
+
+        if node_type == "text":
+            return node.get("text", "")
+        elif node_type == "paragraph":
+            return "".join(parse_node(c) for c in children) + "\n"
+        elif node_type == "heading":
+            return "".join(parse_node(c) for c in children) + "\n"
+        elif node_type in ("bulletList", "orderedList"):
+            return "".join(parse_node(c) for c in children)
+        elif node_type == "listItem":
+            return "• " + "".join(parse_node(c) for c in children)
+        elif node_type == "hardBreak":
+            return "\n"
+        elif node_type == "doc":
+            return "".join(parse_node(c) for c in children)
+        else:
+            return "".join(parse_node(c) for c in children)
+
+    return parse_node(content).strip()
