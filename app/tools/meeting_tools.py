@@ -64,6 +64,27 @@ MEETING_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_meeting_detail_by_title",
+            "description": "Mengambil detail lengkap sebuah meeting berdasarkan title meeting termasuk peserta dan notulen.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "title meeting yang ingin dilihat detailnya"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["title", "user_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_meeting_detail",
             "description": "Mengambil detail lengkap sebuah meeting termasuk peserta dan notulen.",
             "parameters": {
@@ -260,6 +281,8 @@ async def execute_meeting_tool(tool_name: str, args: dict):
         return await _get_meeting_notes(args, user_id)
     elif tool_name == "get_ai_summary":
         return await _get_ai_summary(args, user_id)
+    elif tool_name == "get_meeting_detail_by_title":
+        return await _get_meeting_detail_by_title(args, user_id)
     else:
         raise ValueError(f"Meeting tool '{tool_name}' tidak ditemukan")
 
@@ -392,6 +415,63 @@ async def _get_meeting_detail(args: dict, user_id: str):
     return {
         "success": True,
         "meeting": {**meeting, "participants": participants}
+    }
+
+async def _get_meeting_detail_by_title(args: dict, user_id: str):
+    title = args.get("title")
+
+    if not title:
+        raise ValueError("title wajib diisi")
+
+    # Cari meeting berdasarkan title
+    meeting = execute_query(
+        """
+        SELECT id, title, description, scheduled_at, end_time, location, status, created_by
+        FROM meetings
+        WHERE LOWER(title) = LOWER(%s)
+        LIMIT 1
+        """,
+        (title,),
+        fetch="one"
+    )
+
+    if not meeting:
+        raise LookupError("Meeting tidak ditemukan")
+
+    # Cek apakah user punya akses ke meeting tersebut
+    access = execute_query(
+        """
+        SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s
+        """,
+        (meeting["id"], user_id),
+        fetch="one"
+    )
+
+    if not access:
+        raise PermissionError("Kamu tidak memiliki akses ke meeting ini")
+
+    # Ambil peserta meeting
+    participants = execute_query(
+        """
+        SELECT
+            u.id,
+            u.name,
+            u.email,
+            mp.role
+        FROM meeting_participants mp
+        JOIN users u ON mp.user_id = u.id
+        WHERE mp.meeting_id = %s
+        """,
+        (meeting["id"],),
+        fetch="all"
+    )
+
+    return {
+        "success": True,
+        "meeting": {
+            **meeting,
+            "participants": participants or []
+        }
     }
 
 
