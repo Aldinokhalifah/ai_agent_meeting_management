@@ -1,5 +1,7 @@
 from db.postgres import execute_query
 
+from db.postgres import execute_query
+
 ACTION_ITEM_TOOLS = [
     {
         "type": "function",
@@ -60,7 +62,7 @@ ACTION_ITEM_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_action_item_status",
-            "description": "Mengubah status action item menjadi selesai (done) atau dibuka kembali (open).",
+            "description": "Mengubah status action item menjadi selesai (done) atau dibuka kembali (open) berdasarkan item_id.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -83,6 +85,36 @@ ACTION_ITEM_TOOLS = [
                     }
                 },
                 "required": ["item_id", "meeting_id", "status", "user_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_action_item_status_by_description",
+            "description": "Mengubah status action item berdasarkan deskripsi action item.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting tempat action item berada"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Deskripsi action item yang akan dicari"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["open", "done"],
+                        "description": "Status baru action item"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["meeting_id", "description", "status", "user_id"]
             }
         }
     },
@@ -147,6 +179,8 @@ async def execute_action_item_tool(tool_name: str, args: dict):
         return await _create_action_item(args)
     elif tool_name == "update_action_item_status":
         return await _update_action_item_status(args)
+    elif tool_name == "update_action_item_status_by_description":
+        return await _update_action_item_status_by_description(args)
     elif tool_name == "delete_action_item":
         return await _delete_action_item(args)
     elif tool_name == "get_action_items_by_meeting":
@@ -291,6 +325,66 @@ async def _delete_action_item(args: dict):
     return {
         "success": True,
         "message": f"Action item: {action_item['description']} berhasil dihapus"
+    }
+
+async def _update_action_item_status_by_description(args: dict):
+    meeting_id = args["meeting_id"]
+    description = args["description"].strip()
+    user_id = args["user_id"]
+    status = args["status"]
+
+    # Cek role
+    role = execute_query(
+        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not role or role["role"] not in ("host", "secretary"):
+        raise Exception("Hanya host dan secretary yang dapat mengubah action item")
+
+    # Cari action item berdasarkan deskripsi di meeting yang sama
+    items = execute_query(
+        """
+        SELECT id, description, status, created_at FROM action_items WHERE meeting_id = %s
+        AND description ILIKE %s
+        ORDER BY created_at ASC
+        """,
+        (meeting_id, f"%{description}%")
+    )
+
+    if not items:
+        raise Exception("Action item tidak ditemukan")
+
+    if len(items) > 1:
+        return {
+            "success": False,
+            "message": "Ditemukan beberapa action item yang mirip",
+            "matches": [
+                {
+                    "id": item["id"],
+                    "description": item["description"],
+                    "status": item["status"]
+                }
+                for item in items
+            ]
+        }
+
+    item = items[0]
+
+    execute_query(
+        "UPDATE action_items SET status = %s WHERE id = %s AND meeting_id = %s",
+        (status, item["id"], meeting_id),
+        fetch="none"
+    )
+
+    return {
+        "success": True,
+        "message": f"Status action item '{item['description']}' berhasil diubah menjadi '{status}'",
+        "action_item": {
+            "id": item["id"],
+            "description": item["description"],
+            "status": status
+        }
     }
 
 async def _get_action_items_by_meeting(args: dict):
