@@ -254,20 +254,41 @@ async def _create_action_item(args: dict):
     }
 
 
+def _assert_can_update_action_item_status(role: dict | None, assigned_to, user_id: str, status: str):
+    is_host_or_secretary = role and role["role"] in ("host", "secretary")
+    is_assignee = assigned_to == user_id
+
+    if is_host_or_secretary:
+        return
+    if is_assignee and status == "done":
+        return
+    if is_assignee:
+        raise Exception("Hanya host dan secretary yang dapat membuka kembali action item")
+    raise Exception("Kamu tidak memiliki izin untuk mengubah action item ini")
+
+
 async def _update_action_item_status(args: dict):
     item_id = args["item_id"]
     meeting_id = args["meeting_id"]
     user_id = args["user_id"]
     status = args["status"]
 
-    # Cek role
+    action_item = execute_query(
+        """SELECT id, description, assigned_to, status
+            FROM action_items
+            WHERE id = %s AND meeting_id = %s""",
+        (item_id, meeting_id),
+        fetch="one"
+    )
+    if not action_item:
+        raise Exception("Action item tidak ditemukan")
+
     role = execute_query(
         "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, user_id),
         fetch="one"
     )
-    if not role or role["role"] not in ("host", "secretary"):
-        raise Exception("Hanya host dan secretary yang dapat mengubah action item")
+    _assert_can_update_action_item_status(role, action_item["assigned_to"], user_id, status)
 
     execute_query(
         "UPDATE action_items SET status = %s WHERE id = %s AND meeting_id = %s",
@@ -277,7 +298,7 @@ async def _update_action_item_status(args: dict):
 
     return {
         "success": True,
-        "message": f"Status action item berhasil diubah menjadi '{status}'"
+        "message": f"Status action item '{action_item['description']}' berhasil diubah menjadi '{status}'"
     }
 
 async def _delete_action_item(args: dict):
@@ -333,20 +354,11 @@ async def _update_action_item_status_by_description(args: dict):
     user_id = args["user_id"]
     status = args["status"]
 
-    # Cek role
-    role = execute_query(
-        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
-        (meeting_id, user_id),
-        fetch="one"
-    )
-    if not role or role["role"] not in ("host", "secretary"):
-        raise Exception("Hanya host dan secretary yang dapat mengubah action item")
-
-    # Cari action item berdasarkan deskripsi di meeting yang sama
     items = execute_query(
         """
-        SELECT id, description, status, created_at FROM action_items WHERE meeting_id = %s
-        AND description ILIKE %s
+        SELECT id, description, status, assigned_to, created_at
+        FROM action_items
+        WHERE meeting_id = %s AND description ILIKE %s
         ORDER BY created_at ASC
         """,
         (meeting_id, f"%{description}%")
@@ -370,6 +382,13 @@ async def _update_action_item_status_by_description(args: dict):
         }
 
     item = items[0]
+
+    role = execute_query(
+        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    _assert_can_update_action_item_status(role, item["assigned_to"], user_id, status)
 
     execute_query(
         "UPDATE action_items SET status = %s WHERE id = %s AND meeting_id = %s",

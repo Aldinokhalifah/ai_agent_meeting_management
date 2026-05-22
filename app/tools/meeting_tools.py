@@ -417,38 +417,51 @@ async def _get_meeting_detail(args: dict, user_id: str):
         "meeting": {**meeting, "participants": participants}
     }
 
+def _find_user_meetings_by_title(user_id: str, title: str) -> list:
+    return execute_query(
+        """
+        SELECT m.id, m.title, m.description, m.scheduled_at, m.end_time,
+            m.location, m.status, m.created_by
+        FROM meetings m
+        JOIN meeting_participants mp ON m.id = mp.meeting_id
+        WHERE mp.user_id = %s AND LOWER(m.title) = LOWER(%s)
+        ORDER BY m.scheduled_at DESC
+        """,
+        (user_id, title),
+    )
+
+
+def _meeting_title_match_summary(meetings: list) -> list:
+    return [
+        {
+            "id": m["id"],
+            "title": m["title"],
+            "scheduled_at": str(m["scheduled_at"]),
+            "status": m["status"],
+        }
+        for m in meetings
+    ]
+
+
 async def _get_meeting_detail_by_title(args: dict, user_id: str):
-    title = args.get("title")
+    title = (args.get("title") or "").strip()
 
     if not title:
         raise ValueError("title wajib diisi")
 
-    # Cari meeting berdasarkan title
-    meeting = execute_query(
-        """
-        SELECT id, title, description, scheduled_at, end_time, location, status, created_by
-        FROM meetings
-        WHERE LOWER(title) = LOWER(%s)
-        LIMIT 1
-        """,
-        (title,),
-        fetch="one"
-    )
+    meetings = _find_user_meetings_by_title(user_id, title)
 
-    if not meeting:
-        raise LookupError("Meeting tidak ditemukan")
+    if not meetings:
+        raise Exception("Meeting tidak ditemukan")
 
-    # Cek apakah user punya akses ke meeting tersebut
-    access = execute_query(
-        """
-        SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s
-        """,
-        (meeting["id"], user_id),
-        fetch="one"
-    )
+    if len(meetings) > 1:
+        return {
+            "success": False,
+            "message": "Ditemukan beberapa meeting dengan judul yang sama",
+            "matches": _meeting_title_match_summary(meetings),
+        }
 
-    if not access:
-        raise PermissionError("Kamu tidak memiliki akses ke meeting ini")
+    meeting = meetings[0]
 
     # Ambil peserta meeting
     participants = execute_query(
@@ -617,29 +630,67 @@ async def _get_upcoming_meetings(args: dict, user_id: str):
 
 
 async def _get_meeting_notes(args: dict, user_id: str):
-    meeting_id = args["meeting_id"]
+    meeting_id = args.get("meeting_id")
+    title = (args.get("title") or "").strip()
 
-    # Cek akses
-    access = execute_query(
-        "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
-        (meeting_id, user_id),
-        fetch="one"
-    )
-    if not access:
-        raise Exception("Kamu tidak memiliki akses ke meeting ini")
+    meeting = None
 
+    # Cari berdasarkan meeting_id
+    if meeting_id:
+        access = execute_query(
+            "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+            (meeting_id, user_id),
+            fetch="one"
+        )
+
+        if not access:
+            raise Exception("Kamu tidak memiliki akses ke meeting ini")
+
+        meeting = execute_query(
+            "SELECT id, title FROM meetings WHERE id = %s",
+            (meeting_id,),
+            fetch="one"
+        )
+
+        if not meeting:
+            raise Exception("Meeting tidak ditemukan")
+
+    # Cari berdasarkan title
+    elif title:
+        meetings = _find_user_meetings_by_title(user_id, title)
+
+        if not meetings:
+            raise Exception("Meeting tidak ditemukan")
+
+        if len(meetings) > 1:
+            return {
+                "success": False,
+                "message": "Ditemukan beberapa meeting dengan judul yang sama",
+                "matches": _meeting_title_match_summary(meetings),
+            }
+
+        meeting = meetings[0]
+
+    else:
+        raise ValueError("meeting_id atau title wajib diisi")
+
+    # Ambil note
     note = execute_query(
-        """SELECT n.content, n.updated_at, u.name as created_by_name
-            FROM notes n
-            JOIN users u ON n.created_by = u.id
-            WHERE n.meeting_id = %s""",
-        (meeting_id,),
+        """
+        SELECT n.content, n.updated_at, u.name as created_by_name
+        FROM notes n
+        JOIN users u ON n.created_by = u.id
+        WHERE n.meeting_id = %s
+        """,
+        (meeting["id"],),
         fetch="one"
     )
 
     if not note:
         return {
             "success": True,
+            "meeting_id": meeting["id"],
+            "meeting_title": meeting["title"],
             "note": None,
             "message": "Belum ada notulen untuk meeting ini"
         }
@@ -650,6 +701,8 @@ async def _get_meeting_notes(args: dict, user_id: str):
 
     return {
         "success": True,
+        "meeting_id": meeting["id"],
+        "meeting_title": meeting["title"],
         "note": {
             "content": plain_text,
             "updated_at": str(note["updated_at"]),
