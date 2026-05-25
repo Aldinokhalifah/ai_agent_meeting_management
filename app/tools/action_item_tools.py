@@ -1,7 +1,5 @@
 from db.postgres import execute_query
 
-from db.postgres import execute_query
-
 ACTION_ITEM_TOOLS = [
     {
         "type": "function",
@@ -13,7 +11,7 @@ ACTION_ITEM_TOOLS = [
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["open", "done", "all"],
+                        "enum": ["open", "done", "carried_over", "all"],
                         "description": "Filter status action item"
                     },
                     "user_id": {
@@ -62,7 +60,7 @@ ACTION_ITEM_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_action_item_status",
-            "description": "Mengubah status action item menjadi selesai (done) atau dibuka kembali (open) berdasarkan item_id.",
+            "description": "Mengubah status action item menjadi selesai (done), dibuka kembali (open), atau carried over berdasarkan item_id.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -76,7 +74,7 @@ ACTION_ITEM_TOOLS = [
                     },
                     "status": {
                         "type": "string",
-                        "enum": ["open", "done"],
+                        "enum": ["open", "done", "carried_over"],
                         "description": "Status baru action item"
                     },
                     "user_id": {
@@ -106,7 +104,7 @@ ACTION_ITEM_TOOLS = [
                     },
                     "status": {
                         "type": "string",
-                        "enum": ["open", "done"],
+                        "enum": ["open", "done", "carried_over"],
                         "description": "Status baru action item"
                     },
                     "user_id": {
@@ -157,7 +155,7 @@ ACTION_ITEM_TOOLS = [
                     },
                     "status": {
                         "type": "string",
-                        "enum": ["open", "done", "all"],
+                        "enum": ["open", "done", "carried_over", "all"],
                         "description": "Filter status action item (default: all)"
                     },
                     "user_id": {
@@ -200,8 +198,10 @@ async def _get_my_action_items(args: dict):
                 FROM action_items ai
                 JOIN meetings m ON ai.meeting_id = m.id
                 WHERE ai.assigned_to = %s
-                ORDER BY ai.due_date ASC NULLS LAST LIMIT 20""",
-            (user_id,)
+                ORDER BY ai.due_date ASC NULLS LAST
+                LIMIT 20""",
+            (user_id,),
+            fetch="all"
         )
     else:
         items = execute_query(
@@ -210,8 +210,10 @@ async def _get_my_action_items(args: dict):
                 FROM action_items ai
                 JOIN meetings m ON ai.meeting_id = m.id
                 WHERE ai.assigned_to = %s AND ai.status = %s
-                ORDER BY ai.due_date ASC NULLS LAST LIMIT 20""",
-            (user_id, status)
+                ORDER BY ai.due_date ASC NULLS LAST
+                LIMIT 20""",
+            (user_id, status),
+            fetch="all"
         )
 
     return {
@@ -224,8 +226,27 @@ async def _get_my_action_items(args: dict):
 async def _create_action_item(args: dict):
     meeting_id = args["meeting_id"]
     user_id = args["user_id"]
+    description = (args.get("description") or "").strip()
+    assigned_to = args.get("assigned_to")
+    due_date = args.get("due_date")
 
-    # Cek role — hanya host dan secretary
+    if not description:
+        raise Exception("DESCRIPTION_REQUIRED")
+
+    if due_date:
+        try:
+            from datetime import datetime
+            is_valid_date = not isinstance(datetime.fromisoformat(due_date), type(None))
+        except Exception:
+            raise Exception("INVALID_DATE_FORMAT")
+
+        from datetime import datetime
+        due_dt = datetime.fromisoformat(due_date)
+        today = datetime.now()
+        today = today.replace(hour=0, minute=0, second=0, microsecond=0)
+        if due_dt < today:
+            raise Exception("DUE_DATE_IN_THE_PAST")
+
     role = execute_query(
         "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, user_id),
@@ -234,15 +255,24 @@ async def _create_action_item(args: dict):
     if not role or role["role"] not in ("host", "secretary"):
         raise Exception("Hanya host dan secretary yang dapat membuat action item")
 
+    if assigned_to is not None:
+        assignee_is_participant = execute_query(
+            "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+            (meeting_id, assigned_to),
+            fetch="one"
+        )
+        if not assignee_is_participant:
+            raise Exception("ASSIGNEE_MUST_BE_PARTICIPANT")
+
     item = execute_query(
         """INSERT INTO action_items (meeting_id, description, assigned_to, due_date)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id, description, status, due_date""",
+           VALUES (%s, %s, %s, %s)
+           RETURNING id, description, status, due_date""",
         (
             meeting_id,
-            args["description"],
-            args.get("assigned_to"),
-            args.get("due_date"),
+            description,
+            assigned_to,
+            due_date,
         ),
         fetch="one"
     )
@@ -254,16 +284,20 @@ async def _create_action_item(args: dict):
     }
 
 
-def _assert_can_update_action_item_status(role: dict | None, assigned_to, user_id: str, status: str):
+def _assert_can_update_action_item_status(role: dict | None, assigned_to, user_id: str, current_status: str, new_status: str):
     is_host_or_secretary = role and role["role"] in ("host", "secretary")
-    is_assignee = assigned_to == user_id
+    is_assignee = str(assigned_to) == str(user_id)
 
     if is_host_or_secretary:
         return
-    if is_assignee and status == "done":
-        return
+
     if is_assignee:
-        raise Exception("Hanya host dan secretary yang dapat membuka kembali action item")
+        if current_status == "carried_over":
+            raise Exception("ACTION_ITEM_CANNOT_BE_UPDATED")
+        if new_status == "done":
+            return
+        raise Exception("ASSIGNEE_CAN_ONLY_MARK_DONE")
+
     raise Exception("Kamu tidak memiliki izin untuk mengubah action item ini")
 
 
@@ -275,8 +309,8 @@ async def _update_action_item_status(args: dict):
 
     action_item = execute_query(
         """SELECT id, description, assigned_to, status
-            FROM action_items
-            WHERE id = %s AND meeting_id = %s""",
+           FROM action_items
+           WHERE id = %s AND meeting_id = %s""",
         (item_id, meeting_id),
         fetch="one"
     )
@@ -288,7 +322,14 @@ async def _update_action_item_status(args: dict):
         (meeting_id, user_id),
         fetch="one"
     )
-    _assert_can_update_action_item_status(role, action_item["assigned_to"], user_id, status)
+
+    _assert_can_update_action_item_status(
+        role,
+        action_item["assigned_to"],
+        user_id,
+        action_item["status"],
+        status
+    )
 
     execute_query(
         "UPDATE action_items SET status = %s WHERE id = %s AND meeting_id = %s",
@@ -301,58 +342,15 @@ async def _update_action_item_status(args: dict):
         "message": f"Status action item '{action_item['description']}' berhasil diubah menjadi '{status}'"
     }
 
-async def _delete_action_item(args: dict):
-    item_id = args["item_id"]
-    meeting_id = args["meeting_id"]
-    user_id = args["user_id"]
-
-    # Ambil meeting
-    meeting = execute_query(
-        """SELECT id, title, description, scheduled_at, end_time,
-            location, status, created_by
-            FROM meetings WHERE id = %s""",
-        (meeting_id,),
-        fetch="one"
-    )
-    if not meeting:
-        raise Exception("Meeting tidak ditemukan")
-
-    # Cek role
-    role = execute_query(
-        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
-        (meeting_id, user_id),
-        fetch="one"
-    )
-    if not role or role["role"] not in ("host", "secretary"):
-        raise Exception("Hanya host dan secretary yang dapat mengubah action item")
-
-    action_item = execute_query(
-        """SELECT id, meeting_id, carried_from_id, description, assigned_to, due_date, status, created_at
-            FROM action_items
-            WHERE id = %s AND meeting_id = %s""",
-        (item_id, meeting_id),
-        fetch="one"
-    )
-
-    if not action_item:
-        raise Exception("Action item tidak ditemukan")
-
-    execute_query(
-        "DELETE FROM action_items WHERE id = %s AND meeting_id = %s",
-        (item_id, meeting_id),
-        fetch="none"
-    )
-
-    return {
-        "success": True,
-        "message": f"Action item: {action_item['description']} berhasil dihapus"
-    }
 
 async def _update_action_item_status_by_description(args: dict):
     meeting_id = args["meeting_id"]
-    description = args["description"].strip()
+    description = (args["description"] or "").strip()
     user_id = args["user_id"]
     status = args["status"]
+
+    if not description:
+        raise Exception("DESCRIPTION_REQUIRED")
 
     items = execute_query(
         """
@@ -361,7 +359,8 @@ async def _update_action_item_status_by_description(args: dict):
         WHERE meeting_id = %s AND description ILIKE %s
         ORDER BY created_at ASC
         """,
-        (meeting_id, f"%{description}%")
+        (meeting_id, f"%{description}%"),
+        fetch="all"
     )
 
     if not items:
@@ -388,7 +387,14 @@ async def _update_action_item_status_by_description(args: dict):
         (meeting_id, user_id),
         fetch="one"
     )
-    _assert_can_update_action_item_status(role, item["assigned_to"], user_id, status)
+
+    _assert_can_update_action_item_status(
+        role,
+        item["assigned_to"],
+        user_id,
+        item["status"],
+        status
+    )
 
     execute_query(
         "UPDATE action_items SET status = %s WHERE id = %s AND meeting_id = %s",
@@ -406,12 +412,58 @@ async def _update_action_item_status_by_description(args: dict):
         }
     }
 
+
+async def _delete_action_item(args: dict):
+    item_id = args["item_id"]
+    meeting_id = args["meeting_id"]
+    user_id = args["user_id"]
+
+    meeting = execute_query(
+        """SELECT id, title, description, scheduled_at, end_time,
+            location, status, created_by
+            FROM meetings WHERE id = %s""",
+        (meeting_id,),
+        fetch="one"
+    )
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
+    role = execute_query(
+        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        (meeting_id, user_id),
+        fetch="one"
+    )
+    if not role or role["role"] not in ("host", "secretary"):
+        raise Exception("Hanya host dan secretary yang dapat mengubah action item")
+
+    action_item = execute_query(
+        """SELECT id, meeting_id, carried_from_id, description, assigned_to, due_date, status, created_at
+           FROM action_items
+           WHERE id = %s AND meeting_id = %s""",
+        (item_id, meeting_id),
+        fetch="one"
+    )
+
+    if not action_item:
+        raise Exception("Action item tidak ditemukan")
+
+    execute_query(
+        "DELETE FROM action_items WHERE id = %s AND meeting_id = %s",
+        (item_id, meeting_id),
+        fetch="none"
+    )
+
+    return {
+        "success": True,
+        "message": f"Action item: {action_item['description']} berhasil dihapus"
+    }
+
+
 async def _get_action_items_by_meeting(args: dict):
     meeting_id = args["meeting_id"]
     user_id = args["user_id"]
     status = args.get("status", "all")
 
-    # Cek akses
     access = execute_query(
         "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, user_id),
@@ -428,7 +480,8 @@ async def _get_action_items_by_meeting(args: dict):
                 LEFT JOIN users u ON ai.assigned_to = u.id
                 WHERE ai.meeting_id = %s
                 ORDER BY ai.created_at ASC""",
-            (meeting_id,)
+            (meeting_id,),
+            fetch="all"
         )
     else:
         items = execute_query(
@@ -438,7 +491,8 @@ async def _get_action_items_by_meeting(args: dict):
                 LEFT JOIN users u ON ai.assigned_to = u.id
                 WHERE ai.meeting_id = %s AND ai.status = %s
                 ORDER BY ai.created_at ASC""",
-            (meeting_id, status)
+            (meeting_id, status),
+            fetch="all"
         )
 
     return {

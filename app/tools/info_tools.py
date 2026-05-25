@@ -83,9 +83,15 @@ async def _get_today_schedule(args: dict):
 async def _get_rooms(args: dict):
     # Cek ruangan yang sedang dipakai (ongoing)
     ongoing = execute_query(
-        """SELECT location FROM meetings
-            WHERE status = 'ongoing'
-            AND location IS NOT NULL"""
+        """
+        SELECT location
+        FROM meetings
+        WHERE location IS NOT NULL
+        AND end_time IS NOT NULL
+        AND status NOT IN ('done', 'cancelled')
+        AND NOW() BETWEEN scheduled_at AND end_time
+        """,
+        fetch="all"
     )
 
     occupied_locations = [m["location"] for m in ongoing]

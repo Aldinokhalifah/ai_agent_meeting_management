@@ -1,5 +1,13 @@
 from db.postgres import execute_query
 from datetime import datetime
+from openai import OpenAI
+import os
+from utils.prompt import build_meeting_summary_prompt
+from utils.check_schedule_conflict import check_schedule_conflict
+from utils.check_room_available import check_room_available
+from utils.parse_datetime import parse_datetime
+from utils.meeting_title_match_summary import meeting_title_match_summary
+from utils.find_user_meetings_by_title import find_user_meetings_by_title
 
 MEETING_TOOLS = [
     {
@@ -33,6 +41,17 @@ MEETING_TOOLS = [
                     "user_id": {
                         "type": "string",
                         "description": "ID user yang membuat meeting (diisi otomatis)"
+                    },
+                    "participant_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Daftar ID user peserta meeting"
+                    },
+                    "previous_meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting sebelumnya jika ini meeting lanjutan"
                     }
                 },
                 "required": ["title", "scheduled_at", "user_id"]
@@ -225,12 +244,16 @@ MEETING_TOOLS = [
                         "type": "string",
                         "description": "ID meeting"
                     },
+                    "title": {
+                        "type": "string",
+                        "description": "Judul meeting, dipakai kalau meeting_id tidak tersedia"
+                    },
                     "user_id": {
                         "type": "string",
                         "description": "ID user (diisi otomatis)"
                     }
                 },
-                "required": ["meeting_id", "user_id"]
+                "required": ["user_id"]
             }
         }
     },
@@ -286,66 +309,310 @@ async def execute_meeting_tool(tool_name: str, args: dict):
     else:
         raise ValueError(f"Meeting tool '{tool_name}' tidak ditemukan")
 
-def parse_datetime(value: str) -> str:
-    """Konversi berbagai format datetime ke ISO 8601"""
-    if not value:
-        raise ValueError("scheduled_at tidak boleh kosong")
+openrouter = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY")
+)
 
-    # Coba beberapa format umum
-    formats = [
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
+async def generate_meeting_summary(meeting_id: str, user_id: str):
+    # Ambil meeting
+    meeting = execute_query(
+        """
+        SELECT id, title, scheduled_at, location,
+        description, status
+        FROM meetings
+        WHERE id = %s
+        """,
+        (meeting_id,),
+        fetch="one"
+    )
+
+    if not meeting:
+        raise Exception("MEETING_NOT_FOUND")
+
+    # Cek participant
+    access = execute_query(
+        """
+        SELECT 1
+        FROM meeting_participants
+        WHERE meeting_id = %s
+        AND user_id = %s
+        """,
+        (meeting_id, user_id),
+        fetch="one"
+    )
+
+    if not access:
+        raise Exception("ACCESS_FORBIDDEN")
+
+    # Meeting harus done
+    if meeting["status"] != "done":
+        raise Exception("MEETING_NOT_DONE")
+
+    # Ambil note
+    note = execute_query(
+        """
+        SELECT content
+        FROM notes
+        WHERE meeting_id = %s
+        """,
+        (meeting_id,),
+        fetch="one"
+    )
+
+    note_content = note["content"] if note else None
+
+    note_text = _tiptap_to_text(note_content) if note_content else None
+
+    if not note_text:
+        raise Exception("NOTE_EMPTY")
+
+    # Ambil participants
+    participants = execute_query(
+        """
+        SELECT u.name, mp.role
+        FROM meeting_participants mp
+        JOIN users u ON mp.user_id = u.id
+        WHERE mp.meeting_id = %s
+        """,
+        (meeting_id,),
+        fetch="all"
+    )
+
+    participant_names = ", ".join(
+        [f"{p['name']} ({p['role']})" for p in participants]
+    )
+
+    # Ambil action items
+    action_items = execute_query(
+        """
+        SELECT
+            ai.description,
+            ai.status,
+            ai.due_date,
+            u.name AS assigned_to_name
+        FROM action_items ai
+        LEFT JOIN users u
+            ON ai.assigned_to = u.id
+        WHERE ai.meeting_id = %s
+        """,
+        (meeting_id,),
+        fetch="all"
+    )
+
+    pending_items = [
+        item for item in action_items
+        if item["status"] != "done"
     ]
 
-    for fmt in formats:
-        try:
-            return datetime.strptime(value, fmt).isoformat()
-        except ValueError:
-            continue
+    if pending_items:
+        action_item_text = "\n".join([
+            f"{idx + 1}. {item['description']} "
+            f"(Ditugaskan ke: {item['assigned_to_name'] or 'Belum ditugaskan'}, "
+            f"Deadline: {item['due_date'] or 'Tidak ada deadline'})"
+            for idx, item in enumerate(pending_items)
+        ])
+    else:
+        action_item_text = "Tidak ada action items"
 
-    raise ValueError(f"Format datetime tidak valid: {value}")
+    # Prompt
+    prompt = build_meeting_summary_prompt(
+        meeting["title"],
+        meeting["scheduled_at"],
+        meeting["location"],
+        meeting["description"],
+        note_text,
+        participant_names,
+        action_item_text
+    )
+
+    # Request OpenRouter
+    response = openrouter.chat.completions.create(
+        model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        max_tokens=1000,
+        temperature=0.3
+    )
+
+    summary = response.choices[0].message.content
+
+    if not summary:
+        raise Exception("AI_RESPONSE_EMPTY")
+
+    # Simpan summary
+    execute_query(
+        """
+        UPDATE meetings
+        SET ai_summary = %s
+        WHERE id = %s
+        """,
+        (summary, meeting_id),
+        fetch="none"
+    )
+
+    return summary
 
 async def _create_meeting(args: dict, user_id: str):
+    title = args.get("title")
+    description = args.get("description")
+    location = args.get("location")
+    participant_ids = args.get("participant_ids", [])
+    previous_meeting_id = args.get("previous_meeting_id")
+
+    if not title or not args.get("scheduled_at"):
+        raise Exception("TITLE_AND_SCHEDULE_REQUIRED")
+
+    # Parse datetime
     try:
         scheduled_at = parse_datetime(args["scheduled_at"])
-        end_time = parse_datetime(args["end_time"]) if args.get("end_time") else None
+        end_time = (
+            parse_datetime(args["end_time"])
+            if args.get("end_time")
+            else None
+        )
     except ValueError as e:
         raise Exception(f"Format waktu tidak valid: {str(e)}")
 
+    # Validasi end_time > scheduled_at
+    if end_time and end_time <= scheduled_at:
+        raise Exception("END_TIME_BEFORE_START_TIME")
+
+    # Validasi scheduled_at tidak di masa lalu
+    if scheduled_at < datetime.now(scheduled_at.tzinfo):
+        raise Exception("SCHEDULE_IN_THE_PAST")
+
+    # Validasi room bentrok
+    if location and end_time:
+        room_conflict = check_room_available(
+            location,
+            scheduled_at,
+            end_time
+        )
+
+        if room_conflict:
+            raise Exception("SCHEDULE_CONFLICT_ROOM")
+
+    # Validasi participant bentrok
+    if end_time:
+
+        all_conflicts = []
+
+        for pid in [user_id, *participant_ids]:
+
+            conflicts = check_schedule_conflict(
+                pid,
+                scheduled_at,
+                end_time
+            )
+
+            all_conflicts.extend(conflicts)
+
+        unique_conflicts = list(set(all_conflicts))
+
+        if unique_conflicts:
+            raise Exception(
+                f"SCHEDULE_CONFLICT_USERS_[{', '.join(unique_conflicts)}]"
+            )
+
+    # Create meeting
     meeting = execute_query(
-        """INSERT INTO meetings (title, description, scheduled_at, end_time, location, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id, title, scheduled_at, end_time, location, status""",
-        (
-            args["title"],
-            args.get("description"),
+        """
+        INSERT INTO meetings (
+            title,
+            description,
             scheduled_at,
             end_time,
-            args.get("location"),
+            location,
+            created_by,
+            previous_meeting_id
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING
+            id,
+            title,
+            description,
+            scheduled_at,
+            end_time,
+            location,
+            status
+        """,
+        (
+            title,
+            description,
+            scheduled_at,
+            end_time,
+            location,
             user_id,
+            previous_meeting_id
         ),
         fetch="one"
     )
 
     if not meeting:
-        raise Exception("Gagal membuat meeting")
+        raise Exception("FAILED_CREATE_MEETING")
 
+    # Tambahkan host
     execute_query(
-        """INSERT INTO meeting_participants (meeting_id, user_id, role)
-            VALUES (%s, %s, 'host')""",
+        """
+        INSERT INTO meeting_participants (
+            meeting_id,
+            user_id,
+            role
+        )
+        VALUES (%s, %s, 'host')
+        """,
         (meeting["id"], user_id),
         fetch="none"
     )
 
+    # Tambahkan participant lain
+    for pid in participant_ids:
+
+        if pid == user_id:
+            continue
+
+        execute_query(
+            """
+            INSERT INTO meeting_participants (
+                meeting_id,
+                user_id,
+                role
+            )
+            VALUES (%s, %s, 'participant')
+            """,
+            (meeting["id"], pid),
+            fetch="none"
+        )
+
+    participants = execute_query(
+        """
+        SELECT
+            mp.user_id,
+            mp.role,
+            u.name,
+            u.email
+        FROM meeting_participants mp
+        JOIN users u
+            ON mp.user_id = u.id
+        WHERE mp.meeting_id = %s
+        """,
+        (meeting["id"],),
+        fetch="all"
+    )
+
     return {
         "success": True,
-        "meeting": meeting,
+        "meeting": {
+            **meeting,
+            "participants": participants
+        },
         "message": f"Meeting '{meeting['title']}' berhasil dibuat"
     }
-
 
 async def _get_meetings(args: dict, user_id: str):
     status = args.get("status", "all")
@@ -417,39 +684,13 @@ async def _get_meeting_detail(args: dict, user_id: str):
         "meeting": {**meeting, "participants": participants}
     }
 
-def _find_user_meetings_by_title(user_id: str, title: str) -> list:
-    return execute_query(
-        """
-        SELECT m.id, m.title, m.description, m.scheduled_at, m.end_time,
-            m.location, m.status, m.created_by
-        FROM meetings m
-        JOIN meeting_participants mp ON m.id = mp.meeting_id
-        WHERE mp.user_id = %s AND LOWER(m.title) = LOWER(%s)
-        ORDER BY m.scheduled_at DESC
-        """,
-        (user_id, title),
-    )
-
-
-def _meeting_title_match_summary(meetings: list) -> list:
-    return [
-        {
-            "id": m["id"],
-            "title": m["title"],
-            "scheduled_at": str(m["scheduled_at"]),
-            "status": m["status"],
-        }
-        for m in meetings
-    ]
-
-
 async def _get_meeting_detail_by_title(args: dict, user_id: str):
     title = (args.get("title") or "").strip()
 
     if not title:
         raise ValueError("title wajib diisi")
 
-    meetings = _find_user_meetings_by_title(user_id, title)
+    meetings = find_user_meetings_by_title(user_id, title)
 
     if not meetings:
         raise Exception("Meeting tidak ditemukan")
@@ -458,7 +699,7 @@ async def _get_meeting_detail_by_title(args: dict, user_id: str):
         return {
             "success": False,
             "message": "Ditemukan beberapa meeting dengan judul yang sama",
-            "matches": _meeting_title_match_summary(meetings),
+            "matches": meeting_title_match_summary(meetings),
         }
 
     meeting = meetings[0]
@@ -512,7 +753,14 @@ async def _update_meeting_status(args: dict, user_id: str):
     meeting_id = args["meeting_id"]
     status = args["status"]
 
-    # Cek hanya host yang bisa update
+    meeting = execute_query(
+        "SELECT id, title, status FROM meetings WHERE id = %s",
+        (meeting_id,),
+        fetch="one"
+    )
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
     role = execute_query(
         "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, user_id),
@@ -526,6 +774,13 @@ async def _update_meeting_status(args: dict, user_id: str):
         (status, meeting_id),
         fetch="none"
     )
+
+    # panggil backend generate summary saat done
+    if status == "done":
+        try:
+            await generate_meeting_summary(meeting_id, user_id)
+        except Exception as e:
+            print(f"[AI SUMMARY ERROR] {str(e)}")
 
     return {
         "success": True,
@@ -608,17 +863,20 @@ async def _get_meeting_participants(args: dict, user_id: str):
 
 async def _get_upcoming_meetings(args: dict, user_id: str):
     days = args.get("days", 7)
-    
+
     meetings = execute_query(
-        """SELECT m.id, m.title, m.scheduled_at, m.end_time,
+        """
+        SELECT m.id, m.title, m.scheduled_at, m.end_time,
             m.location, m.status, mp.role as my_role
-            FROM meetings m
-            JOIN meeting_participants mp ON m.id = mp.meeting_id
-            WHERE mp.user_id = %s
-            AND m.status = 'scheduled'
-            AND m.scheduled_at BETWEEN NOW() AND NOW() + INTERVAL '%s days'
-            ORDER BY m.scheduled_at ASC""",
-        (user_id, days)
+        FROM meetings m
+        JOIN meeting_participants mp ON m.id = mp.meeting_id
+        WHERE mp.user_id = %s
+        AND m.status = 'scheduled'
+        AND m.scheduled_at BETWEEN NOW() AND NOW() + (%s || ' days')::interval
+        ORDER BY m.scheduled_at ASC
+        """,
+        (user_id, days),
+        fetch="all"
     )
 
     return {
@@ -657,7 +915,7 @@ async def _get_meeting_notes(args: dict, user_id: str):
 
     # Cari berdasarkan title
     elif title:
-        meetings = _find_user_meetings_by_title(user_id, title)
+        meetings = find_user_meetings_by_title(user_id, title)
 
         if not meetings:
             raise Exception("Meeting tidak ditemukan")
@@ -666,7 +924,7 @@ async def _get_meeting_notes(args: dict, user_id: str):
             return {
                 "success": False,
                 "message": "Ditemukan beberapa meeting dengan judul yang sama",
-                "matches": _meeting_title_match_summary(meetings),
+                "matches": meeting_title_match_summary(meetings),
             }
 
         meeting = meetings[0]

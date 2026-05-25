@@ -1,4 +1,5 @@
 from db.postgres import execute_query
+from utils.check_schedule_conflict import check_schedule_conflict
 
 PARTICIPANT_TOOLS = [
     {
@@ -121,11 +122,14 @@ async def _search_user(args: dict):
     keyword = args["keyword"]
 
     users = execute_query(
-        """SELECT id, name, email
-            FROM users
-            WHERE name ILIKE %s OR email ILIKE %s
-            LIMIT 10""",
-        (f"%{keyword}%", f"%{keyword}%")
+        """
+        SELECT id, name, email
+        FROM users
+        WHERE name ILIKE %s OR email ILIKE %s
+        LIMIT 10
+        """,
+        (f"%{keyword}%", f"%{keyword}%"),
+        fetch="all"
     )
 
     return {
@@ -140,37 +144,79 @@ async def _add_participant(args: dict):
     target_user_id = args["target_user_id"]
     user_id = args["user_id"]
 
-    # Cek hanya host yang bisa tambah peserta
+    meeting = execute_query(
+        """
+        SELECT id, scheduled_at, end_time, status
+        FROM meetings
+        WHERE id = %s
+        """,
+        (meeting_id,),
+        fetch="one"
+    )
+
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan.")
+
     role = execute_query(
-        "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+        """
+        SELECT role
+        FROM meeting_participants
+        WHERE meeting_id = %s AND user_id = %s
+        """,
         (meeting_id, user_id),
         fetch="one"
     )
+
     if not role or role["role"] != "host":
-        raise Exception("Hanya host yang dapat menambahkan peserta")
+        raise Exception("Hanya host yang dapat menambahkan peserta.")
 
-    # Cek sudah jadi peserta belum
-    existing = execute_query(
-        "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
-        (meeting_id, target_user_id),
-        fetch="one"
-    )
-    if existing:
-        raise Exception("User sudah menjadi peserta meeting ini")
-
-    # Cek user ada
     target_user = execute_query(
-        "SELECT id, name, email FROM users WHERE id = %s",
+        """
+        SELECT id, name, email
+        FROM users
+        WHERE id = %s
+        """,
         (target_user_id,),
         fetch="one"
     )
-    if not target_user:
-        raise Exception("User tidak ditemukan")
 
-    # Tambahkan peserta
+    if not target_user:
+        raise Exception("Peserta tidak ditemukan.")
+
+    existing = execute_query(
+        """
+        SELECT 1
+        FROM meeting_participants
+        WHERE meeting_id = %s AND user_id = %s
+        """,
+        (meeting_id, target_user_id),
+        fetch="one"
+    )
+
+    if existing:
+        raise Exception(f"Peserta {target_user['name']} sudah menjadi peserta")
+
+    if meeting["end_time"]:
+        conflict_users = check_schedule_conflict(
+            target_user_id,
+            meeting["scheduled_at"],
+            meeting["end_time"]
+        )
+
+        if conflict_users:
+            raise Exception(
+                f"SCHEDULE_CONFLICT_USERS_{','.join(conflict_users)}"
+            )
+
     execute_query(
-        """INSERT INTO meeting_participants (meeting_id, user_id, role)
-            VALUES (%s, %s, 'participant')""",
+        """
+        INSERT INTO meeting_participants (
+            meeting_id,
+            user_id,
+            role
+        )
+        VALUES (%s, %s, 'participant')
+        """,
         (meeting_id, target_user_id),
         fetch="none"
     )
@@ -180,45 +226,59 @@ async def _add_participant(args: dict):
         "message": f"{target_user['name']} berhasil ditambahkan sebagai peserta"
     }
 
+
 async def _remove_participant(args: dict):
     meeting_id = args["meeting_id"]
     target_user_id = args["target_user_id"]
     user_id = args["user_id"]
 
-    # Cek hanya host yang bisa hapus peserta
+    meeting = execute_query(
+        """
+        SELECT id, title
+        FROM meetings
+        WHERE id = %s
+        """,
+        (meeting_id,),
+        fetch="one"
+    )
+
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
     role = execute_query(
         "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, user_id),
         fetch="one"
     )
+
     if not role or role["role"] != "host":
         raise Exception("Hanya host yang dapat menghapus peserta")
 
     if target_user_id == user_id:
         raise Exception("Host tidak bisa menghapus diri sendiri")
 
-    # Cek target memang peserta meeting
     existing = execute_query(
         "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, target_user_id),
         fetch="one"
     )
+
     if not existing:
         raise Exception("User bukan peserta meeting ini")
 
-    # Cek user ada
     target_user = execute_query(
         "SELECT id, name, email FROM users WHERE id = %s",
         (target_user_id,),
         fetch="one"
     )
+
     if not target_user:
         raise Exception("User tidak ditemukan")
 
     execute_query(
-        "DELETE FROM meeting_participants WHERE meeting_id = %s AND user_id = %s ",
+        "DELETE FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, target_user_id),
-        fetch='none'
+        fetch="none"
     )
 
     return {
@@ -226,50 +286,64 @@ async def _remove_participant(args: dict):
         "message": f"{target_user['name']} berhasil dihapus sebagai peserta"
     }
 
+
 async def _update_role_participant(args: dict):
     meeting_id = args["meeting_id"]
     target_user_id = args["target_user_id"]
     user_id = args["user_id"]
-    role_target = args["role"]
-    validRoles = ["secretary", "participant"]
+    new_role = args["role"]
 
-    if role_target not in validRoles:
+    valid_roles = ["secretary", "participant"]
+    if new_role not in valid_roles:
         raise Exception("Role tidak valid")
 
-    # Cek hanya host yang bisa update role peserta
+    meeting = execute_query(
+        """
+        SELECT id, title
+        FROM meetings
+        WHERE id = %s
+        """,
+        (meeting_id,),
+        fetch="one"
+    )
+
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
     role = execute_query(
         "SELECT role FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, user_id),
         fetch="one"
     )
+
     if not role or role["role"] != "host":
         raise Exception("Hanya host yang dapat memperbarui role peserta")
 
     if target_user_id == user_id:
         raise Exception("Host tidak bisa memperbarui role diri sendiri")
 
-    # Cek target memang peserta meeting
     existing = execute_query(
         "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
         (meeting_id, target_user_id),
         fetch="one"
     )
+
     if not existing:
         raise Exception("User bukan peserta meeting ini")
 
-    # Cek user ada
     target_user = execute_query(
         "SELECT id, name, email FROM users WHERE id = %s",
         (target_user_id,),
         fetch="one"
     )
+
     if not target_user:
         raise Exception("User tidak ditemukan")
-    
+
     execute_query(
         "UPDATE meeting_participants SET role = %s WHERE meeting_id = %s AND user_id = %s",
-        (role_target, meeting_id, target_user_id),
-        fetch='none'
+        (new_role, meeting_id, target_user_id),
+        fetch="none"
     )
 
     return {
