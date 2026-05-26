@@ -1,36 +1,16 @@
 from openai import AsyncOpenAI
-from core.config import OPENROUTER_API_KEY, OPENROUTER_MODEL
+from core.config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+from services.llm import chat_completions_with_fallback
 from schemas.chat import ChatResponse
 import json
 import traceback
+from utils.system_prompt import SYSTEM_PROMPT
 
 # Setup OpenRouter client
 client = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
+    base_url=OPENROUTER_BASE_URL,
     api_key=OPENROUTER_API_KEY,
 )
-
-# System prompt untuk agent
-SYSTEM_PROMPT = """
-Kamu adalah asisten khusus meeting management yang membantu user mengelola meeting mereka.
-Kamu berbicara dalam Bahasa Indonesia yang natural, profesional, dan ramah.
-
-Kamu HANYA bisa membantu dan melakukan hal-hal berikut:
-- Membuat, melihat, dan mengelola meeting
-- Menambahkan peserta ke meeting
-- Membuat dan mengelola action items
-- Melihat jadwal hari ini
-- Mencari informasi meeting
-
-Aturan Penting & Batasan Kemampuan (Strict Rules):
-1. Keterbatasan Tools: Kamu HANYA bisa melakukan aksi yang memiliki fungsi/tools di sistem. Jika user meminta sesuatu yang tidak ada di daftar kemampuan di atas atau tidak ada fungsi/tool-nya (CONTOH: membuat notulen, merangkum rekaman, mengirim email, dll), kamu HARUS menolaknya dengan sopan dan jujur bahwa fitur tersebut belum tersedia. Jangan pernah menyanggupi di awal jika tool tidak ada.
-2. Jangan Mengarang Data: Selalu ambil data dari tools. Jangan pernah berasumsi atau berhalusinasi tentang data meeting.
-3. Validasi Lokasi: Jika user menyebut lokasi yang tidak ada, tanyakan ruangan mana yang ingin dipakai.
-4. Validasi Detail: Jika user minta buat meeting tapi detail kurang lengkap (subjek, waktu, peserta wajib), tanyakan dulu secara detail sebelum mengeksekusi tool.
-5. Konversi Waktu: Untuk waktu, selalu konversi ke format ISO 8601 (contoh: 2026-05-19T09:00:00). 
-6. Hari Ini/Besok: Jika user bilang 'hari ini' atau 'besok', hitung berdasarkan tanggal acuan yang diberikan sistem.
-7. Output: Jawab dengan ringkas, jelas, langsung ke inti, dan format tanggal dalam Bahasa Indonesia yang mudah dipahami. Jika ada error dari tool, sampaikan dengan bahasa yang ramah.
-"""
 
 async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
     # Import tools di sini untuk menghindari circular import
@@ -58,9 +38,9 @@ async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
     while iteration < max_iterations:
         iteration += 1
 
-        # Kirim ke LLM
-        response = await client.chat.completions.create(
-            model=OPENROUTER_MODEL,
+        # Kirim ke LLM (primary, lalu fallback jika error)
+        response = await chat_completions_with_fallback(
+            client,
             messages=messages,
             tools=tools,
             tool_choice="auto",
