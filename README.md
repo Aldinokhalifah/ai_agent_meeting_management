@@ -23,7 +23,7 @@ Backend **FastAPI** untuk asisten meeting berbasis LLM: model dipanggil lewat **
 | `app/tools/action_item_tools.py` | Action items: milik user, buat, status, hapus, per meeting.                                                                                             |
 | `app/tools/info_tools.py`        | Jadwal hari ini dan daftar ruangan (tersedia).                                                                                                          |
 | `app/tools/continuation_tools.py`| Continuation meeting: buat meeting lanjutan dan akses meeting sebelumnya.                                                                              |
-| `app/services/llm.py`            | Helper **LangChain** `ChatOpenAI` menuju OpenRouter; tidak dipakai oleh `main.py` saat ini (alur chat aktif memakai SDK OpenAI langsung di `agent.py`). |
+| `app/services/llm.py`            | Helper **LangChain** `ChatOpenAI` menuju OpenRouter dengan logika fallback model otomatis saat model utama error. |
 | `app/schemas/chat.py`            | Model `ChatRequest` / `ChatResponse` dan `Message` untuk riwayat.                                                                                       |
 
 
@@ -40,8 +40,9 @@ Backend **FastAPI** untuk asisten meeting berbasis LLM: model dipanggil lewat **
 1. Salin `.env.example` menjadi `.env` dan isi variabel yang dipakai aplikasi.
 2. `**DATABASE_URL`** — connection string PostgreSQL (dipakai `app/db/postgres.py` untuk tools dan `GET /test-connection`).
 3. `**OPENROUTER_API_KEY**` — wajib untuk agen.
-4. `**OPENROUTER_MODEL**` — opsional; default di kode: `openai/gpt-oss-20b:free`.
-5. `**APP_HOST**` / `**APP_PORT**` — opsional; default `0.0.0.0` dan `8000`.
+4. `**OPENROUTER_MODEL**` atau `**PRIMARY_MODEL**` — model OpenRouter utama; default di kode: `openai/gpt-oss-120b:free`.
+5. `**FALLBACK_MODEL**` — model cadangan untuk dipakai jika model utama error; default: `meta-llama/llama-3.3-70b-instruct:free`.
+6. `**APP_HOST**` / `**APP_PORT**` — opsional; default `0.0.0.0` dan `8000`.
 
 Variabel `POSTGRES_*` dan lainnya di `.env.example` bisa Anda pakai untuk menyusun `DATABASE_URL` secara manual atau di orchestration.
 
