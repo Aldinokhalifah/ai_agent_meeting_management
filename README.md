@@ -22,6 +22,7 @@ Backend **FastAPI** untuk asisten meeting berbasis LLM: model dipanggil lewat **
 | `app/tools/participant_tools.py` | Peserta: cari user, tambah/hapus, ubah peran.                                                                                                           |
 | `app/tools/action_item_tools.py` | Action items: milik user, buat, status, hapus, per meeting.                                                                                             |
 | `app/tools/info_tools.py`        | Jadwal hari ini dan daftar ruangan (tersedia).                                                                                                          |
+| `app/tools/continuation_tools.py`| Continuation meeting: buat meeting lanjutan dan akses meeting sebelumnya.                                                                              |
 | `app/services/llm.py`            | Helper **LangChain** `ChatOpenAI` menuju OpenRouter; tidak dipakai oleh `main.py` saat ini (alur chat aktif memakai SDK OpenAI langsung di `agent.py`). |
 | `app/schemas/chat.py`            | Model `ChatRequest` / `ChatResponse` dan `Message` untuk riwayat.                                                                                       |
 
@@ -29,6 +30,7 @@ Backend **FastAPI** untuk asisten meeting berbasis LLM: model dipanggil lewat **
 ### Nama tools (referensi)
 
 - **Meeting:** `create_meeting`, `get_meetings`, `get_meeting_detail`, `search_meetings`, `update_meeting_status`, `remove_meeting`, `get_meeting_participants`, `get_upcoming_meetings`, `get_meeting_notes`, `get_ai_summary`
+- **Continuation:** `create_continuation_meeting`, `get_previous_meeting`
 - **Peserta:** `search_user`, `add_participant`, `remove_participant`, `update_role_participant`
 - **Action items:** `get_my_action_items`, `create_action_item`, `update_action_item_status`, `delete_action_item`, `get_action_items_by_meeting`
 - **Info:** `get_today_schedule`, `get_rooms`
