@@ -21,6 +21,8 @@ class Settings:
     fallback_model: str
     app_host: str
     app_port: int
+    whatsapp_api_token: str | None      # ← tambah
+    whatsapp_api_url: str    
 
     @property
     def openrouter_model(self) -> str:
@@ -49,6 +51,8 @@ def _build_settings() -> Settings:
         fallback_model=fallback,
         app_host=os.getenv("APP_HOST", "0.0.0.0"),
         app_port=int(os.getenv("APP_PORT", 8000)),
+        whatsapp_api_token=os.getenv("WHATSAPP_API_TOKEN"),          # ← tambah
+        whatsapp_api_url=os.getenv("WHATSAPP_API_URL", "https://api.fonnte.com/send"),  # ← tambah
     )
 
 
@@ -63,3 +67,5 @@ FALLBACK_MODEL = settings.fallback_model
 MODELS_WITH_FALLBACK = settings.models_with_fallback
 APP_HOST = settings.app_host
 APP_PORT = settings.app_port
+WHATSAPP_API_TOKEN = settings.whatsapp_api_token   # ← tambah
+WHATSAPP_API_URL = settings.whatsapp_api_url 

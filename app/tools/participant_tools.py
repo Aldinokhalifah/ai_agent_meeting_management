@@ -1,5 +1,6 @@
 from db.postgres import execute_query
 from utils.check_schedule_conflict import check_schedule_conflict
+from services.waService import send_invitation_whatsapp
 
 PARTICIPANT_TOOLS = [
     {
@@ -146,7 +147,7 @@ async def _add_participant(args: dict):
 
     meeting = execute_query(
         """
-        SELECT id, scheduled_at, end_time, status
+        SELECT id, title, scheduled_at, end_time, location, status
         FROM meetings
         WHERE id = %s
         """,
@@ -172,7 +173,7 @@ async def _add_participant(args: dict):
 
     target_user = execute_query(
         """
-        SELECT id, name, email
+        SELECT id, name, email, whatsapp_phone
         FROM users
         WHERE id = %s
         """,
@@ -220,6 +221,24 @@ async def _add_participant(args: dict):
         (meeting_id, target_user_id),
         fetch="none"
     )
+    
+    if target_user.get("whatsapp_phone"):
+        host = execute_query(
+            "SELECT name FROM users WHERE id = %s",
+            (user_id,),
+            fetch="one"
+        )
+        try:
+            await send_invitation_whatsapp(
+                recipient_phone=target_user["whatsapp_phone"],
+                recipient_name=target_user["name"],
+                meeting=meeting,
+                host_name=host["name"] if host else "Host",
+            )
+        except Exception as e:
+            print(f"[WA Error] Invitation to {target_user['whatsapp_phone']}: {e}")
+    else:
+        print(f"[WA Skipped] {target_user.get('name')} tidak punya whatsapp_phone (user_id={target_user_id})")
 
     return {
         "success": True,

@@ -8,6 +8,8 @@ from utils.check_room_available import check_room_available
 from utils.parse_datetime import parse_datetime
 from utils.meeting_title_match_summary import meeting_title_match_summary
 from utils.find_user_meetings_by_title import find_user_meetings_by_title
+from utils.tiptap_to_text import tiptap_to_text
+from services.waService import send_meeting_summary_whatsapps
 
 MEETING_TOOLS = [
     {
@@ -362,7 +364,7 @@ async def generate_meeting_summary(meeting_id: str, user_id: str):
 
     note_content = note["content"] if note else None
 
-    note_text = _tiptap_to_text(note_content) if note_content else None
+    note_text = tiptap_to_text(note_content) if note_content else None
 
     if not note_text:
         raise Exception("NOTE_EMPTY")
@@ -782,6 +784,11 @@ async def _update_meeting_status(args: dict, user_id: str):
         except Exception as e:
             print(f"[AI SUMMARY ERROR] {str(e)}")
 
+        try:
+            await send_meeting_summary_whatsapps(meeting_id)
+        except Exception as e:
+            print(f"[WA ERROR] meeting {meeting_id}: {str(e)}")
+
     return {
         "success": True,
         "message": f"Status meeting berhasil diubah menjadi '{status}'"
@@ -955,7 +962,7 @@ async def _get_meeting_notes(args: dict, user_id: str):
 
     # Konversi Tiptap JSON ke plain text
     content = note.get("content", {})
-    plain_text = _tiptap_to_text(content)
+    plain_text = tiptap_to_text(content)
 
     return {
         "success": True,
@@ -1007,34 +1014,3 @@ async def _get_ai_summary(args: dict, user_id: str):
         "meeting_title": meeting["title"],
         "ai_summary": meeting["ai_summary"]
     }
-
-
-def _tiptap_to_text(content) -> str:
-    """Konversi Tiptap JSON ke plain text"""
-    if not content:
-        return ""
-
-    def parse_node(node):
-        if not node:
-            return ""
-        node_type = node.get("type", "")
-        children = node.get("content", [])
-
-        if node_type == "text":
-            return node.get("text", "")
-        elif node_type == "paragraph":
-            return "".join(parse_node(c) for c in children) + "\n"
-        elif node_type == "heading":
-            return "".join(parse_node(c) for c in children) + "\n"
-        elif node_type in ("bulletList", "orderedList"):
-            return "".join(parse_node(c) for c in children)
-        elif node_type == "listItem":
-            return "• " + "".join(parse_node(c) for c in children)
-        elif node_type == "hardBreak":
-            return "\n"
-        elif node_type == "doc":
-            return "".join(parse_node(c) for c in children)
-        else:
-            return "".join(parse_node(c) for c in children)
-
-    return parse_node(content).strip()

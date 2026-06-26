@@ -5,6 +5,7 @@ from utils.meeting_title_match_summary import meeting_title_match_summary
 from utils.check_schedule_conflict import check_schedule_conflict
 from utils.parse_datetime import parse_datetime
 from datetime import datetime
+from services.waService import send_invitation_whatsapp
 
 CONTINUATION_TOOLS = [
     {
@@ -234,6 +235,12 @@ async def _create_continuation_meeting(args: dict, user_id: str):
     )
 
     valid_access_levels = ["full", "summary_only", "none"]
+    
+    host = execute_query(
+        "SELECT name FROM users WHERE id = %s",
+        (user_id,),
+        fetch="one"
+    )
 
     for p in participant_ids:
 
@@ -304,6 +311,23 @@ async def _create_continuation_meeting(args: dict, user_id: str):
             ),
             fetch="none"
         )
+
+        target_user = execute_query(
+            "SELECT id, name, whatsapp_phone FROM users WHERE id = %s",
+            (participant_user_id,),
+            fetch="one"
+        )
+
+        if target_user and target_user.get("whatsapp_phone"):
+            try:
+                await send_invitation_whatsapp(
+                    recipient_phone=target_user["whatsapp_phone"],
+                    recipient_name=target_user["name"],
+                    meeting=meeting,
+                    host_name=host["name"] if host else "Host",
+                )
+            except Exception as e:
+                print(f"[WA Error] Invitation to {target_user.get('whatsapp_phone')}: {e}")
 
     open_action_items = execute_query(
         """
