@@ -1,9 +1,22 @@
 from langchain_openai import ChatOpenAI
-from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    RateLimitError,
+    BadRequestError,
+)
 
 from core.config import MODELS_WITH_FALLBACK, settings
 
-_MODEL_ERRORS = (APIError, APIConnectionError, RateLimitError, APITimeoutError)
+_MODEL_ERRORS = (
+    APIError,
+    APIConnectionError,
+    RateLimitError,
+    APITimeoutError,
+    BadRequestError,
+)
 
 
 def build_chat_model(model: str | None = None) -> ChatOpenAI:

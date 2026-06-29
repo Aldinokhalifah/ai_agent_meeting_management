@@ -20,7 +20,6 @@ async def send_invitation_whatsapp(recipient_phone, recipient_name, meeting: dic
     )
 
     result = await send_whatsapp_text(to, message)
-    print(f"✓ WA undangan → {to}")
     return result
 
 
@@ -80,12 +79,10 @@ async def send_meeting_summary_whatsapps(meeting_id: str):
                 my_action_items=my_action_items,
             )
             result = await send_whatsapp_text(to, message)
-            print(f"✓ WA ringkasan meeting → {participant['name']} ({to})")
             results.append({"status": "fulfilled", "user_id": participant["id"], "result": result})
         except Exception as e:
             print(f"✗ WA ringkasan gagal → {participant['name']}: {e}")
             results.append({"status": "rejected", "user_id": participant["id"], "error": str(e)})
 
     ok = len([r for r in results if r["status"] == "fulfilled"])
-    print(f"[WA Summary] meeting {meeting_id}: {ok}/{len(results)} terkirim")
     return results

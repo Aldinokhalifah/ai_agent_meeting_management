@@ -28,10 +28,8 @@ async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
 
     # Tambahkan pesan user terbaru
     messages.append({"role": "user", "content": message})
-
-    print(f"\n[Agent] History received: {len(history)} messages")
-    print(f"[Agent] Messages to LLM: {len(messages)} (after processing)")
-    # Agent loop — maksimal 5 iterasi untuk hindari infinite loop
+    
+    # Agent loop — maksimal 10 iterasi untuk hindari infinite loop
     max_iterations = 10
     iteration = 0
 
