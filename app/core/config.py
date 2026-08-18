@@ -6,19 +6,28 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _models_with_fallback(primary: str, fallback: str) -> tuple[str, ...]:
-    if fallback and fallback != primary:
-        return (primary, fallback)
-    return (primary,)
+def _unique_nonempty(*items: str | None) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        if not it:
+            continue
+        if it in seen:
+            continue
+        seen.add(it)
+        out.append(it)
+    return tuple(out)
 
 
 @dataclass(frozen=True)
 class Settings:
     database_url: str | None
     openrouter_api_key: str | None
+    openrouter_api_key_fallback: str | None
     openrouter_base_url: str
     primary_model: str
     fallback_model: str
+    fallback_secondary_model: str
     app_host: str
     app_port: int
     whatsapp_api_token: str | None      # ← tambah
@@ -30,7 +39,11 @@ class Settings:
 
     @property
     def models_with_fallback(self) -> tuple[str, ...]:
-        return _models_with_fallback(self.primary_model, self.fallback_model)
+        return _unique_nonempty(self.primary_model, self.fallback_model, self.fallback_secondary_model)
+
+    @property
+    def openrouter_api_keys(self) -> tuple[str, ...]:
+        return _unique_nonempty(self.openrouter_api_key, self.openrouter_api_key_fallback)
 
 
 def _build_settings() -> Settings:
@@ -40,15 +53,19 @@ def _build_settings() -> Settings:
         or "openai/gpt-oss-120b:free"
     )
     fallback = os.getenv("FALLBACK_MODEL") or "meta-llama/llama-3.3-70b-instruct:free"
+    fallback_secondary = os.getenv("FALLBACK_SECONDARY_MODEL") or ""
+    api_key_fallback = os.getenv("OPENROUTER_API_KEY_FALLBACK")
 
     return Settings(
         database_url=os.getenv("DATABASE_URL"),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+        openrouter_api_key_fallback=api_key_fallback,
         openrouter_base_url=os.getenv(
             "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
         ),
         primary_model=primary,
         fallback_model=fallback,
+        fallback_secondary_model=fallback_secondary,
         app_host=os.getenv("APP_HOST", "0.0.0.0"),
         app_port=int(os.getenv("APP_PORT", 8000)),
         whatsapp_api_token=os.getenv("WHATSAPP_API_TOKEN"),          # ← tambah
@@ -60,6 +77,7 @@ settings = _build_settings()
 
 DATABASE_URL = settings.database_url
 OPENROUTER_API_KEY = settings.openrouter_api_key
+OPENROUTER_API_KEY_FALLBACK = settings.openrouter_api_key_fallback
 OPENROUTER_BASE_URL = settings.openrouter_base_url
 OPENROUTER_MODEL = settings.primary_model
 PRIMARY_MODEL = settings.primary_model
@@ -69,3 +87,4 @@ APP_HOST = settings.app_host
 APP_PORT = settings.app_port
 WHATSAPP_API_TOKEN = settings.whatsapp_api_token   # ← tambah
 WHATSAPP_API_URL = settings.whatsapp_api_url 
+OPENROUTER_API_KEYS = settings.openrouter_api_keys
