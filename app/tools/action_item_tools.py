@@ -41,18 +41,18 @@ ACTION_ITEM_TOOLS = [
                     },
                     "assigned_to": {
                         "type": "string",
-                        "description": "ID user yang ditugaskan (opsional)"
+                        "description": "ID user yang ditugaskan"
                     },
                     "due_date": {
                         "type": "string",
-                        "description": "Deadline dalam format YYYY-MM-DD (opsional)"
+                        "description": "Deadline dalam format YYYY-MM-DD"
                     },
                     "user_id": {
                         "type": "string",
                         "description": "ID user (diisi otomatis)"
                     }
                 },
-                "required": ["meeting_id", "description", "user_id"]
+                "required": ["meeting_id", "description", "user_id", "due_date"]
             }
         }
     },
