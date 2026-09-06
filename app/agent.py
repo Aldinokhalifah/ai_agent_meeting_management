@@ -36,7 +36,7 @@ async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
     while iteration < max_iterations:
         iteration += 1
 
-        # Kirim ke LLM (primary, lalu fallback jika error)
+        # Kirim ke LLM: semua API key × semua model, baru gagal jika habis
         response = await chat_completions_with_fallback(
             client,
             messages=messages,
@@ -49,6 +49,9 @@ async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
                 "X-Title": "Meeting Management App",
             }
         )
+
+        print("[LLM Debug] Response:", response)
+        print("[LLM Debug] Choices:", response.choices)
 
         choice = response.choices[0]
         message_response = choice.message

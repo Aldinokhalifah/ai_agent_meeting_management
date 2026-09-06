@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from schemas.chat import ChatRequest, ChatResponse
 from agent import run_agent
 from core.config import APP_HOST, APP_PORT
+from services.llm import LLMUnavailableError
 from test_db import test_connection
 import uvicorn
 
@@ -32,8 +33,15 @@ async def chat(request: ChatRequest):
             history=request.conversation_history,
         )
         return result
+    except LLMUnavailableError as e:
+        # detail harus string: Node `new Error(error.detail)` tidak bisa terima object
+        raise HTTPException(status_code=e.status_code, detail=e.message)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print("Error message", e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Terjadi kesalahan internal server (500): {e}",
+        )
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=True)

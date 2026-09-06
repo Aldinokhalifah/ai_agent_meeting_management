@@ -2,6 +2,7 @@ from db.postgres import execute_query
 from datetime import datetime
 from openai import OpenAI
 import os
+from services.llm import chat_completions_with_fallback_sync
 from utils.prompt import build_meeting_summary_prompt
 from utils.check_schedule_conflict import check_schedule_conflict
 from utils.check_room_available import check_room_available
@@ -428,9 +429,9 @@ async def generate_meeting_summary(meeting_id: str, user_id: str):
         action_item_text
     )
 
-    # Request OpenRouter
-    response = openrouter.chat.completions.create(
-        model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
+    # Request OpenRouter (semua API key × model)
+    response = chat_completions_with_fallback_sync(
+        openrouter,
         messages=[
             {
                 "role": "user",
