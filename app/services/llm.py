@@ -41,14 +41,12 @@ _STATUS_MESSAGES = {
     404: "Model AI yang diminta sedang tidak tersedia. Silakan coba beberapa saat lagi.",
     408: "Waktu tunggu respon AI habis karena koneksi lambat. Silakan coba kirim ulang pesanmu.",
     429: "Layanan AI sedang sangat padat. Mohon tunggu sebentar lalu coba kirim pesanmu lagi.",
-    500: "Terjadi gangguan internal pada server AI. Sistem telah mencoba opsi cadangan namun masih gagal. Coba lagi nanti.",
+    500: "Terjadi gangguan internal pada server AI. Coba lagi nanti.",
     502: "Koneksi ke server AI terputus di tengah jalan. Silakan coba lagi beberapa saat lagi.",
     503: "Layanan AI sedang dalam pemeliharaan atau tidak dapat dijangkau. Coba lagi dalam beberapa menit.",
     504: "AI membutuhkan waktu terlalu lama untuk merespon. Coba pecah pertanyaanmu menjadi lebih sederhana.",
     529: "Sistem AI sedang mengalami lonjakan pengguna yang sangat tinggi. Mohon coba lagi secara berkala.",
 }
-
-
 class LLMUnavailableError(Exception):
     """Dipakai untuk menegembalikan pesan error yang berdasarkan status code dan message
 

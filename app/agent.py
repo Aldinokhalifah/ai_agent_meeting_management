@@ -50,9 +50,6 @@ async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
             }
         )
 
-        print("[LLM Debug] Response:", response)
-        print("[LLM Debug] Choices:", response.choices)
-
         choice = response.choices[0]
         message_response = choice.message
 
@@ -95,7 +92,7 @@ async def run_agent(message: str, user_id: str, history: list) -> ChatResponse:
                 result_str = json.dumps(tool_result, ensure_ascii=False, default=str)
             except Exception as e:
                 # Tambahkan print untuk debug
-                print(f"[Tool Error] {tool_name}: {str(e)}")
+                # print(f"[Tool Error] {tool_name}: {str(e)}")
                 traceback.print_exc()
                 result_str = json.dumps({
                     "error": True,
