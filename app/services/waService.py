@@ -1,6 +1,10 @@
 from db.postgres import execute_query
 from utils.normalize_phone import normalize_indonesia_whatsapp
-from utils.wa_templates import invitation_message, meeting_summary_message
+from utils.wa_templates import (
+    invitation_message,
+    meeting_cancelled_message,
+    meeting_summary_message,
+)
 from utils.wa_client import send_whatsapp_text
 from utils.tiptap_to_text import tiptap_to_text
 
@@ -21,6 +25,50 @@ async def send_invitation_whatsapp(recipient_phone, recipient_name, meeting: dic
 
     result = await send_whatsapp_text(to, message)
     return result
+
+
+async def send_meeting_cancelled_whatsapps(meeting_id: str):
+    meeting = execute_query(
+        "SELECT id, title, scheduled_at, end_time, location FROM meetings WHERE id = %s",
+        (meeting_id,),
+        fetch="one",
+    )
+    if not meeting:
+        raise Exception("Meeting tidak ditemukan")
+
+    participants = execute_query(
+        """
+        SELECT u.id, u.name, u.whatsapp_phone
+        FROM meeting_participants mp
+        JOIN users u ON mp.user_id = u.id
+        WHERE mp.meeting_id = %s
+        """,
+        (meeting_id,),
+        fetch="all",
+    )
+
+    results = []
+    for participant in participants:
+        to = normalize_indonesia_whatsapp(participant.get("whatsapp_phone"))
+        if not to:
+            results.append({"status": "skipped", "user_id": participant["id"], "reason": "invalid_phone"})
+            continue
+
+        try:
+            message = meeting_cancelled_message(
+                recipient_name=participant["name"],
+                meeting_title=meeting["title"],
+                scheduled_at=meeting["scheduled_at"],
+                end_time=meeting.get("end_time"),
+                location=meeting.get("location"),
+            )
+            result = await send_whatsapp_text(to, message)
+            results.append({"status": "fulfilled", "user_id": participant["id"], "result": result})
+        except Exception as e:
+            print(f"✗ WA pembatalan gagal → {participant['name']}: {e}")
+            results.append({"status": "rejected", "user_id": participant["id"], "error": str(e)})
+
+    return results
 
 
 async def send_meeting_summary_whatsapps(meeting_id: str):

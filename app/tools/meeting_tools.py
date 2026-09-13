@@ -10,7 +10,10 @@ from utils.parse_datetime import parse_datetime
 from utils.meeting_title_match_summary import meeting_title_match_summary
 from utils.find_user_meetings_by_title import find_user_meetings_by_title
 from utils.tiptap_to_text import tiptap_to_text
-from services.waService import send_meeting_summary_whatsapps
+from services.waService import (
+    send_meeting_cancelled_whatsapps,
+    send_meeting_summary_whatsapps,
+)
 
 MEETING_TOOLS = [
     {
@@ -790,6 +793,12 @@ async def _update_meeting_status(args: dict, user_id: str):
         except Exception as e:
             print(f"[WA ERROR] meeting {meeting_id}: {str(e)}")
 
+    if status == "cancelled":
+        try:
+            await send_meeting_cancelled_whatsapps(meeting_id)
+        except Exception as e:
+            print(f"[WA ERROR] pembatalan meeting {meeting_id}: {str(e)}")
+
     return {
         "success": True,
         "message": f"Status meeting berhasil diubah menjadi '{status}'"
@@ -817,6 +826,12 @@ async def _remove_meeting(args: dict, user_id: str):
     )
     if not role or role["role"] != "host":
         raise Exception("Hanya host yang dapat menghapus meeting")
+
+    if meeting["status"] != "cancelled":
+        try:
+            await send_meeting_cancelled_whatsapps(meeting_id)
+        except Exception as e:
+            print(f"[WA ERROR] penghapusan meeting {meeting_id}: {str(e)}")
 
     # Hapus dependensi terlebih dahulu untuk menghindari FK constraint (jika ada)
     execute_query(

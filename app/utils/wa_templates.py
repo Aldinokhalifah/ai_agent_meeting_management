@@ -40,9 +40,28 @@ def invitation_message(recipient_name, meeting_title, scheduled_at, end_time, lo
         f"⏰ {time_range}",
     ]
     if location:
-        lines.append(f"📍 {location}")
+        lines.append(f"🏢 {location}")
     lines.append(f"👤 Host: {host_name}")
     lines += ["", "Sampai jumpa di meeting."]
+    return "\n".join(lines)
+
+
+def meeting_cancelled_message(recipient_name, meeting_title, scheduled_at, end_time, location) -> str:
+    time_range = (
+        f"{format_time(scheduled_at)} – {format_time(end_time)}"
+        if end_time
+        else format_time(scheduled_at)
+    )
+    lines = [
+        f"Halo {recipient_name},",
+        "",
+        f"Pertemuan *{meeting_title}* telah dibatalkan.",
+        f"📅 {format_date(scheduled_at)}",
+        f"⏰ {time_range}",
+    ]
+    if location:
+        lines.append(f"🏢 {location}")
+    lines += ["", "Mohon abaikan jadwal meeting tersebut.", "", "— Meeting Management"]
     return "\n".join(lines)
 
 
@@ -54,7 +73,7 @@ def meeting_summary_message(recipient_name, meeting_title, scheduled_at, locatio
         f"📅 {format_date(scheduled_at)}",
     ]
     if location:
-        lines.append(f"📍 {location}")
+        lines.append(f"🏢 {location}")
     lines.append("")
 
     if ai_summary:
