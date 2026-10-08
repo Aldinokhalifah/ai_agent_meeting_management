@@ -268,6 +268,31 @@ MEETING_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_meeting_attachments",
+            "description": "Mengambil daftar dokumen pendukung berstatus uploaded dari sebuah meeting berdasarkan ID atau judul.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "ID meeting"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Judul meeting, dipakai kalau meeting_id tidak tersedia"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "ID user (diisi otomatis)"
+                    }
+                },
+                "required": ["user_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_ai_summary",
             "description": "Mengambil AI summary dari sebuah meeting yang sudah selesai.",
             "parameters": {
@@ -310,6 +335,8 @@ async def execute_meeting_tool(tool_name: str, args: dict):
         return await _get_upcoming_meetings(args, user_id)
     elif tool_name == "get_meeting_notes":
         return await _get_meeting_notes(args, user_id)
+    elif tool_name == "get_meeting_attachments":
+        return await _get_meeting_attachments(args, user_id)
     elif tool_name == "get_ai_summary":
         return await _get_ai_summary(args, user_id)
     elif tool_name == "get_meeting_detail_by_title":
@@ -1004,6 +1031,143 @@ async def _get_meeting_notes(args: dict, user_id: str):
             "updated_at": str(note["updated_at"]),
             "created_by": note["created_by_name"]
         }
+    }
+
+async def _get_meeting_attachments(args: dict, user_id: str):
+    meeting_id = args.get("meeting_id")
+    title = (args.get("title") or "").strip()
+
+    # Resolusi meeting, pemeriksaan akses, dan penanganan judul kembar
+    # mengikuti pola get_meeting_notes.
+    meeting = None
+
+    if meeting_id:
+        access = execute_query(
+            "SELECT 1 FROM meeting_participants WHERE meeting_id = %s AND user_id = %s",
+            (meeting_id, user_id),
+            fetch="one"
+        )
+
+        if not access:
+            raise Exception("Kamu tidak memiliki akses ke meeting ini")
+
+        meeting = execute_query(
+            "SELECT id, title FROM meetings WHERE id = %s",
+            (meeting_id,),
+            fetch="one"
+        )
+
+        if not meeting:
+            raise Exception("Meeting tidak ditemukan")
+
+    elif title:
+        meetings = find_user_meetings_by_title(user_id, title)
+
+        if not meetings:
+            raise Exception("Meeting tidak ditemukan")
+
+        if len(meetings) > 1:
+            return {
+                "success": False,
+                "message": "Ditemukan beberapa meeting dengan judul yang sama",
+                "matches": meeting_title_match_summary(meetings),
+            }
+
+        meeting = meetings[0]
+
+    else:
+        raise ValueError("meeting_id atau title wajib diisi")
+
+    rows = execute_query(
+        """
+        SELECT
+            a.file_name,
+            a.file_size,
+            a.file_type,
+            u.name AS uploaded_by,
+            a.created_at
+        FROM meeting_attachments a
+        LEFT JOIN users u ON u.id = a.uploaded_by
+        WHERE a.meeting_id = %s AND a.status = 'uploaded'
+        ORDER BY a.created_at DESC
+        """,
+        (meeting["id"],),
+        fetch="all"
+    ) or []
+
+    mime_type_labels = {
+        "application/pdf": "PDF",
+        "application/msword": "Word (DOC)",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word (DOCX)",
+        "application/vnd.ms-excel": "Excel (XLS)",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Excel (XLSX)",
+        "image/jpeg": "Gambar (JPEG)",
+        "image/png": "Gambar (PNG)",
+        "image/gif": "Gambar (GIF)",
+        "image/webp": "Gambar (WebP)",
+        "image/bmp": "Gambar (BMP)",
+        "image/tiff": "Gambar (TIFF)",
+    }
+    extension_labels = {
+        ".pdf": "PDF",
+        ".doc": "Word (DOC)",
+        ".docx": "Word (DOCX)",
+        ".xls": "Excel (XLS)",
+        ".xlsx": "Excel (XLSX)",
+        ".jpg": "Gambar (JPEG)",
+        ".jpeg": "Gambar (JPEG)",
+        ".png": "Gambar (PNG)",
+        ".gif": "Gambar (GIF)",
+        ".webp": "Gambar (WebP)",
+        ".bmp": "Gambar (BMP)",
+        ".tif": "Gambar (TIFF)",
+        ".tiff": "Gambar (TIFF)",
+    }
+
+    attachments = []
+    for row in rows:
+        file_name = row["file_name"]
+        stored_type = row["file_type"]
+        mime_type = str(stored_type).lower()
+        extension = os.path.splitext(file_name)[1].lower()
+        display_type = (
+            extension_labels.get(extension)
+            or mime_type_labels.get(mime_type)
+            or ("Gambar" if mime_type.startswith("image/") else stored_type)
+        )
+        size_bytes = row["file_size"]
+        size_label = f"{size_bytes} byte"
+        if size_bytes >= 1024:
+            size_label = f"{size_bytes / 1024:.1f} KB"
+        if size_bytes >= 1024 ** 2:
+            size_label = f"{size_bytes / (1024 ** 2):.1f} MB"
+        if size_bytes >= 1024 ** 3:
+            size_label = f"{size_bytes / (1024 ** 3):.1f} GB"
+
+        attachments.append({
+            "file_name": file_name,
+            "size": size_label,
+            "size_bytes": size_bytes,
+            "file_type": display_type,
+            "uploaded_by": row["uploaded_by"] or "Tidak diketahui",
+            "uploaded_at": str(row["created_at"]) if row["created_at"] is not None else None,
+        })
+
+    if not attachments:
+        return {
+            "success": True,
+            "meeting_id": meeting["id"],
+            "meeting_title": meeting["title"],
+            "attachments": [],
+            "message": "Belum ada dokumen pendukung"
+        }
+
+    return {
+        "success": True,
+        "meeting_id": meeting["id"],
+        "meeting_title": meeting["title"],
+        "attachments": attachments,
+        "total": len(attachments)
     }
 
 
