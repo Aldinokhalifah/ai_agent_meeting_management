@@ -32,6 +32,13 @@ class Settings:
     app_port: int
     whatsapp_api_token: str | None      # ← tambah
     whatsapp_api_url: str    
+    minio_endpoint: str
+    minio_port: int
+    minio_use_ssl: bool
+    minio_access_key: str | None
+    minio_secret_key: str | None
+    minio_bucket: str
+    minio_region: str
 
     @property
     def openrouter_model(self) -> str:
@@ -70,6 +77,13 @@ def _build_settings() -> Settings:
         app_port=int(os.getenv("APP_PORT", 8000)),
         whatsapp_api_token=os.getenv("WHATSAPP_API_TOKEN"),          # ← tambah
         whatsapp_api_url=os.getenv("WHATSAPP_API_URL", "https://api.fonnte.com/send"),  # ← tambah
+        minio_endpoint=os.getenv("MINIO_ENDPOINT", "localhost"),
+        minio_port=int(os.getenv("MINIO_PORT", 9000)),
+        minio_use_ssl=os.getenv("MINIO_USE_SSL", "false").lower() == "true",
+        minio_access_key=os.getenv("MINIO_ACCESS_KEY"),
+        minio_secret_key=os.getenv("MINIO_SECRET_KEY"),
+        minio_bucket=os.getenv("MINIO_BUCKET", "meeting-attachments"),
+        minio_region=os.getenv("MINIO_REGION", "us-east-1"),
     )
 
 
@@ -88,3 +102,10 @@ APP_PORT = settings.app_port
 WHATSAPP_API_TOKEN = settings.whatsapp_api_token   # ← tambah
 WHATSAPP_API_URL = settings.whatsapp_api_url 
 OPENROUTER_API_KEYS = settings.openrouter_api_keys
+MINIO_ENDPOINT = settings.minio_endpoint
+MINIO_PORT = settings.minio_port
+MINIO_USE_SSL = settings.minio_use_ssl
+MINIO_ACCESS_KEY = settings.minio_access_key
+MINIO_SECRET_KEY = settings.minio_secret_key
+MINIO_BUCKET = settings.minio_bucket
+MINIO_REGION = settings.minio_region

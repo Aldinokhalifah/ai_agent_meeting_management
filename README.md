@@ -43,6 +43,7 @@ Backend **FastAPI** untuk asisten meeting berbasis LLM: model dipanggil lewat **
 4. `**OPENROUTER_MODEL**` atau `**PRIMARY_MODEL**` — model OpenRouter utama; default di kode: `openai/gpt-oss-120b:free`.
 5. `**FALLBACK_MODEL**` — model cadangan untuk dipakai jika model utama error; default: `meta-llama/llama-3.3-70b-instruct:free`.
 6. `**APP_HOST**` / `**APP_PORT**` — opsional; default `0.0.0.0` dan `8000`.
+7. `**MINIO_ENDPOINT**`, `**MINIO_PORT**`, `**MINIO_USE_SSL**`, `**MINIO_ACCESS_KEY**`, `**MINIO_SECRET_KEY**`, `**MINIO_BUCKET**`, `**MINIO_REGION**` — koneksi ke MinIO, dipakai tool `remove_meeting` untuk menghapus dokumen pendukung meeting. Nilainya harus sama dengan konfigurasi MinIO di backend Express.
 
 Variabel `POSTGRES_*` dan lainnya di `.env.example` bisa Anda pakai untuk menyusun `DATABASE_URL` secara manual atau di orchestration.
 

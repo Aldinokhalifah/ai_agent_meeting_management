@@ -1,3 +1,4 @@
+import asyncio
 from db.postgres import execute_query
 from datetime import datetime
 from openai import OpenAI
@@ -10,6 +11,7 @@ from utils.parse_datetime import parse_datetime
 from utils.meeting_title_match_summary import meeting_title_match_summary
 from utils.find_user_meetings_by_title import find_user_meetings_by_title
 from utils.tiptap_to_text import tiptap_to_text
+from utils.meeting_attachments import get_meeting_object_keys, remove_meeting_objects
 from services.waService import (
     send_meeting_cancelled_whatsapps,
     send_meeting_summary_whatsapps,
@@ -833,6 +835,15 @@ async def _remove_meeting(args: dict, user_id: str):
         except Exception as e:
             print(f"[WA ERROR] penghapusan meeting {meeting_id}: {str(e)}")
 
+    # Ambil key file dokumen pendukung SEBELUM meeting dihapus: DELETE meeting
+    # menghapus baris meeting_attachments lewat cascade, tapi file di MinIO tidak ikut terhapus.
+    # Kegagalan di sini tidak boleh menggagalkan penghapusan meeting.
+    try:
+        object_keys = get_meeting_object_keys(meeting_id)
+    except Exception as e:
+        print(f"[ATTACHMENT ERROR] gagal membaca dokumen meeting {meeting_id}: {str(e)}")
+        object_keys = []
+
     # Hapus dependensi terlebih dahulu untuk menghindari FK constraint (jika ada)
     execute_query(
         "DELETE FROM action_items WHERE meeting_id = %s",
@@ -850,6 +861,10 @@ async def _remove_meeting(args: dict, user_id: str):
         (meeting_id,),
         fetch="none"
     )
+
+    # Hapus file di MinIO di thread terpisah supaya jawaban chat tidak menunggu MinIO
+    if object_keys:
+        asyncio.get_running_loop().run_in_executor(None, remove_meeting_objects, object_keys)
 
     return {
         "success": True,
